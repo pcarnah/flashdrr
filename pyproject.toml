@@ -1,0 +1,204 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flashdrr"
+dynamic = ["version"]
+description = "Fast differentiable DRR raycasting and volume rendering for PyTorch"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Patrick Carnahan" },
+    { name = "Arteen Mirzai" },
+]
+keywords = [
+    "pytorch",
+    "volume",
+    "raycasting",
+    "rendering",
+    "medical-imaging",
+    "deep-learning",
+    "radiograph",
+    "drr",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Topic :: Scientific/Engineering :: Visualization",
+]
+
+# ---------------------------------------------------------------------------
+# Core runtime dependencies.
+#
+# PyTorch ships separate wheels per CUDA version. The default `pip install
+# flashdrr` will pull `torch` from PyPI (CPU build on most platforms). To
+# install with a specific CUDA version, use one of the optional groups below:
+#
+#     pip install flashdrr[cu128]   # PyTorch built against CUDA 12.8
+#     pip install flashdrr[cu130]   # PyTorch built against CUDA 13.0
+#
+# For each CUDA build, point pip at the matching PyTorch index, e.g.:
+#     pip install flashdrr[cu128] \
+#         --extra-index-url https://download.pytorch.org/whl/cu128
+#
+# `triton` is the upstream package on Linux/macOS; the community-maintained
+# `triton-windows` fork is the only available build on Windows (the upstream
+# `triton` does not publish Windows wheels). The PEP 508 environment marker
+# selects the right one for the current platform.
+# ---------------------------------------------------------------------------
+dependencies = [
+    "torch >= 2.5",
+    "torchvision >= 0.20",
+    "numpy",
+    "matplotlib",
+    "tqdm",
+    "monai",
+    "triton >= 2.1; sys_platform != 'win32'",
+    "triton-windows >= 3.0; sys_platform == 'win32'",
+]
+
+[project.optional-dependencies]
+# ---------------------------------------------------------------------------
+# CUDA-version-specific PyTorch builds. Each extra pins torch + torchvision
+# to versions that are known to ship the requested CUDA wheel. To actually
+# get the CUDA build, the user must also pass the matching PyTorch index:
+#
+#     pip install flashdrr[cu128] --extra-index-url https://download.pytorch.org/whl/cu128
+#     pip install flashdrr[cu130] --extra-index-url https://download.pytorch.org/whl/cu130
+# ---------------------------------------------------------------------------
+cu128 = [
+    "torch >= 2.7.0",       # first release with cu128 wheels
+    "torchvision >= 0.22.0",
+]
+cu130 = [
+    "torch >= 2.9.0",       # first release with cu130 wheels
+    "torchvision >= 0.24.0",
+]
+# CPU-only build (the default `pip install flashdrr` also picks this up).
+cpu = [
+    "torch >= 2.5",
+    "torchvision >= 0.20",
+]
+
+
+# ---------------------------------------------------------------------------
+# Functional extras
+# ---------------------------------------------------------------------------
+# DICOM support (used by flashdrr.converters.dicom). pydicom needs `gdcm`
+# available on the system (typically installed via conda) for the full
+# feature set.
+# Tooling/scripts: nibabel is only required by the medical-decathlon
+# crawler script; pull it in only when needed.
+data = [
+    "nibabel",
+]
+docs = [
+    "sphinx",
+    "myst-parser",
+    "sphinx-rtd-theme",
+]
+# Convenience: install everything optional (pick one CUDA variant first).
+all = [
+    "flashdrr[data, docs]",
+]
+
+[project.urls]
+Homepage = "https://github.com/torchvtk/torchvtk"
+Repository = "https://github.com/torchvtk/torchvtk.git"
+Documentation = "https://torchvtk.github.io"
+Issues = "https://github.com/torchvtk/torchvtk/issues"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["flashdrr*"]
+# Converters are part of the package, only exclude top-level dev dirs.
+exclude = [
+    "docs*",
+    "tests*",
+    "test*",
+    "benchmarks*",
+]
+
+[tool.setuptools.package-data]
+# Ship the small bundled test data with the wheel.
+flashdrr = ["data/*.pt"]
+
+[tool.setuptools.dynamic]
+# Read the version from flashdrr/__init__.py so we only have to bump it
+# in one place.
+version = { attr = "flashdrr.__version__" }
+
+# ---------------------------------------------------------------------------
+# UV (https://docs.astral.sh/uv/) configuration
+#
+# `cu128`, `cu130`, and `cpu` are mutually exclusive: they all constrain the
+# same torch/torchvision dependency but pin different version ranges tied
+# to different wheel indexes. [tool.uv.conflicts] tells uv's resolver these
+# extras can never be selected together, so it doesn't try to build one
+# universal lockfile that satisfies all three at once (which is how you end
+# up with duplicate/mismatched torch installs).
+#
+# [tool.uv.sources] is scoped per-extra via `extra = "..."`, so the index
+# uv pulls from actually follows the extra you select instead of being
+# hardcoded to one CUDA version:
+#
+#     uv sync --extra cu128   # pulls torch/torchvision from the cu128 index
+#     uv sync --extra cu130   # pulls torch/torchvision from the cu130 index
+#     uv sync --extra cpu     # pulls torch/torchvision from PyPI (no override)
+#
+# If no extra is selected, torch/torchvision resolve from PyPI per the base
+# `dependencies` list (CPU build on most platforms).
+# ---------------------------------------------------------------------------
+[tool.uv]
+conflicts = [
+    [{ extra = "cu128" }, { extra = "cu130" }, { extra = "cpu" }],
+]
+
+[tool.uv.sources]
+torch = [
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+torchvision = [
+    { index = "pytorch-cu128", extra = "cu128" },
+    { index = "pytorch-cu130", extra = "cu130" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu130"
+url = "https://download.pytorch.org/whl/cu130"
+explicit = true
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = true
+
+# ---------------------------------------------------------------------------
+# UV dependency groups (PEP 735) — for dev-only tooling, not CUDA selection.
+# CUDA build selection is handled entirely via the cu128/cu130/cpu *extras*
+# above plus [tool.uv.sources]/[tool.uv.conflicts]. Group names must not
+# collide with extra names (PEP 735 requires the two namespaces stay
+# disjoint), so this table intentionally does NOT redefine cu128/cu130/cpu.
+#
+# Use with:  uv sync --extra cu130 --group test
+# ---------------------------------------------------------------------------
+[dependency-groups]
+test = [
+    "pytest",
+]

@@ -1,0 +1,8 @@
+.vscode
+.mypy_cache
+**/__pycache__/
+*.egg-info
+docs/_build
+.idea/
+.ipynb_checkpoints/
+.virtual_documents/
