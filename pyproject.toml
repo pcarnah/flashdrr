@@ -114,10 +114,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/torchvtk/torchvtk"
-Repository = "https://github.com/torchvtk/torchvtk.git"
-Documentation = "https://torchvtk.github.io"
-Issues = "https://github.com/torchvtk/torchvtk/issues"
+Homepage = "https://github.com/pcarnah/flashdrr"
+Repository = "https://github.com/pcarnah/flashdrr.git"
+Issues = "https://github.com/pcarnah/flashdrr/issues"
 
 [tool.setuptools]
 include-package-data = true
