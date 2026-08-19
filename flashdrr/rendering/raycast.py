@@ -1,46 +1,46 @@
-# Very much inspired by the excellent code from Philipp Henzler on his PlatonicGAN, ICCV19
-# PlatonicGAN: https://henzler.github.io/publication/platonicgan/
-# See https://github.com/henzler/platonicgan/blob/master/scripts/renderer
-#%%
+# Initially adapted from torchvtk (https://github.com/torchvtk/torchvtk/). Rendering engine completely re-written since.
+
 import math
+from timeit import default_timer as timer
 from typing import Tuple, Optional
 
-import monai.data
+import numpy as np
 import torch
 import torch.nn.functional as F
 import torch.utils.checkpoint as cp
-from monai.networks.blocks import Convolution
 from torch import nn
-import numpy as np
-
-from flashdrr.utils import make_2d
-
-from timeit import default_timer as timer
 
 from flashdrr.rendering.triton_raycast import FusedVolumeRenderer
+from flashdrr.utils import make_2d
 
-__all__ = ['homogenize_mat', 'homogenize_vec', 'get_proj_mat', 'get_view_mat', 'get_vtk_view_mat', 'get_random_pos', 'VolumeRaycaster']
+__all__ = ['homogenize_mat', 'homogenize_vec', 'get_proj_mat', 'get_view_mat', 'get_vtk_view_mat', 'get_random_pos',
+           'VolumeRaycaster']
+
 
 def homogenize_mat(mat):
     ''' Adds a row (bottom) and column (right) to the matrix `mat` with all zeros and a 1 in the lower right corner.
     Is used to make the matrix work as transformation for homogeneous coordinates. '''
     assert torch.is_tensor(mat)
-    ret = torch.eye(mat.size(-1)+1, dtype=mat.dtype, device=mat.device)
+    ret = torch.eye(mat.size(-1) + 1, dtype=mat.dtype, device=mat.device)
     if mat.ndim > 2:
         flat_mat = mat.view(-1, mat.size(-2), mat.size(-1))
         num_mats = flat_mat.size(0)
         ret = ret[None].expand(num_mats, -1, -1)
-    else: flat_mat = mat
+    else:
+        flat_mat = mat
     ret[..., :mat.size(-2), :mat.size(-1)] = flat_mat
-    return ret.reshape(*mat.shape[:-2], mat.size(-2)+1, mat.size(-1)+1)
+    return ret.reshape(*mat.shape[:-2], mat.size(-2) + 1, mat.size(-1) + 1)
+
 
 def homogenize_vec(vec, dim=None):
     ''' Adds an additional component to `vec` with value 1 to make it a homogeneous coordinate. '''
     assert torch.is_tensor(vec) and 3 in vec.shape
     if dim is None: dim = vec.ndim - list(reversed(vec.shape)).index(3) - 1
-    ad_shape = list(vec.shape); ad_shape[dim] = 1
+    ad_shape = list(vec.shape);
+    ad_shape[dim] = 1
     nu = torch.ones(ad_shape, dtype=vec.dtype, device=vec.device)
     return torch.cat([vec, nu], dim=dim)
+
 
 def get_proj_mat(fov, aspect, near=0.1, far=100, dtype=None, device=None):
     ''' Computes a projection matrix according to inputs
@@ -58,13 +58,14 @@ def get_proj_mat(fov, aspect, near=0.1, far=100, dtype=None, device=None):
     a = q / aspect
     # b = (far + near) / (near - far)
     # c = (2*far*near) / (near - far)
-    b = -far / (far-near)
-    c = - (far*near)/(far-near)
+    b = -far / (far - near)
+    c = - (far * near) / (far - near)
 
     return torch.tensor([[a, 0, 0, 0],
                          [0, q, 0, 0],
-                         [0, 0, b,-1],
+                         [0, 0, b, -1],
                          [0, 0, c, 0]]).to(dtype).to(device)
+
 
 # import glm
 # def get_random_view_mat(distance=(2,3)):
@@ -90,25 +91,31 @@ def get_view_mat(look_from, look_to=None, look_up=None, dtype=None):
     '''
     look_from = make_2d(look_from)
     bs, dev = look_from.size(0), look_from.device
-    if look_up is None: look_up = F.normalize(torch.eye(3)[1].expand(bs, 3), dim=1).to(dev)
-    else:               look_up = make_2d(look_up)
-    if look_to is None: look_to = F.normalize(torch.zeros(3).expand( bs, 3), dim=1).to(dev)
-    else:               look_to = make_2d(look_to)
+    if look_up is None:
+        look_up = F.normalize(torch.eye(3)[1].expand(bs, 3), dim=1).to(dev)
+    else:
+        look_up = make_2d(look_up)
+    if look_to is None:
+        look_to = F.normalize(torch.zeros(3).expand(bs, 3), dim=1).to(dev)
+    else:
+        look_to = make_2d(look_to)
 
     z = F.normalize(look_from - look_to, dim=1).expand(bs, 3)
     x = F.normalize(torch.cross(look_up, z), dim=1)
     y = torch.cross(z, x, dim=1)
     ret = torch.eye(4)[None].expand(bs, -1, -1)
     ret[..., :3, :3] = torch.stack([x, y, z], dim=1)
-    ret[...,  3, :3] = torch.stack([torch.bmm(x.unsqueeze(-2), look_from.unsqueeze(-1)),
-                                    torch.bmm(y.unsqueeze(-2), look_from.unsqueeze(-1)),
-                                    torch.bmm(z.unsqueeze(-2), look_from.unsqueeze(-1))]).squeeze()
+    ret[..., 3, :3] = torch.stack([torch.bmm(x.unsqueeze(-2), look_from.unsqueeze(-1)),
+                                   torch.bmm(y.unsqueeze(-2), look_from.unsqueeze(-1)),
+                                   torch.bmm(z.unsqueeze(-2), look_from.unsqueeze(-1))]).squeeze()
     return ret.to(dtype)
+
 
 def lookAt(look_from, look_up=None):
     view_dir = F.normalize(-look_from)
     if look_up is None:
-        look_up = torch.tensor([1.0, .0, 0], dtype=look_from.dtype, device=look_from.device).expand(look_from.size(0), -1)
+        look_up = torch.tensor([1.0, .0, 0], dtype=look_from.dtype, device=look_from.device).expand(look_from.size(0),
+                                                                                                    -1)
         right = torch.cross(look_up, view_dir)
         up = torch.cross(right, view_dir)
     else:
@@ -180,6 +187,7 @@ def get_random_carm_views(n_views, sid_range, ap_range, lat_range, si_range, cen
     views = torch.stack(views)
 
     return views
+
 
 def carm_to_camera_params(sid, ap_angle, lat_angle, center_ras, table_si=0.0):
     """
@@ -259,7 +267,6 @@ def carm_to_camera_params(sid, ap_angle, lat_angle, center_ras, table_si=0.0):
     return cam_pos, look_at, look_up
 
 
-
 def get_vtk_view_mat(cam_pos: Tuple[float],  # (3,) camera center in RAS
                      cam_focal: Tuple[float],  # (3,) camera focal point in RAS
                      cam_viewup: Tuple[float],  # (3,) view-up vector in RAS)
@@ -277,7 +284,7 @@ def get_vtk_view_mat(cam_pos: Tuple[float],  # (3,) camera center in RAS
     view_mat = torch.zeros(4, 4, device=device)
     view_mat[:3, 0] = right
     view_mat[:3, 1] = up
-    view_mat[:3, 2] = forward 
+    view_mat[:3, 2] = forward
     view_mat[:3, 3] = cam_pos
     view_mat[3, 3] = 1.0
 
@@ -288,17 +295,18 @@ def get_rot_mat(look_from, old_look_from=None):
     if old_look_from is None:
         old_look_from = torch.zeros_like(look_from)
         old_look_from[..., 2] = 1.0
-    look_from     = F.normalize(look_from, dim=1)
+    look_from = F.normalize(look_from, dim=1)
     old_look_from = F.normalize(old_look_from, dim=1)
     v = torch.cross(old_look_from, look_from, dim=1)
     s = torch.norm(v, dim=1)
     c = torch.bmm(old_look_from.unsqueeze(-2), look_from.unsqueeze(-1))
-    vx = torch.tensor([[0,       -v[:,2], v[:,1]], # skew symmetric cross product matrix
-                       [ v[:,2],    0,   -v[:,0]],
-                       [-v[:,1],  v[:,0],    0  ]])
-    return torch.eye(3) + vx + vx**2 * (1/(1+c))
+    vx = torch.tensor([[0, -v[:, 2], v[:, 1]],  # skew symmetric cross product matrix
+                       [v[:, 2], 0, -v[:, 0]],
+                       [-v[:, 1], v[:, 0], 0]])
+    return torch.eye(3) + vx + vx ** 2 * (1 / (1 + c))
 
-def get_random_pos(bs=1, distance=(1,5)):
+
+def get_random_pos(bs=1, distance=(1, 5)):
     ''' Computes a vector of random positions.
     Args:
         bs (int): Batch size, number of positions to generate
@@ -306,11 +314,12 @@ def get_random_pos(bs=1, distance=(1,5)):
     Returns:
         List / Batch of random camera positions as torch Tensor of shape (BS, 3)
     '''
-    if   isinstance(distance, (tuple, list)): # Draw random in between
+    if isinstance(distance, (tuple, list)):  # Draw random in between
         d = torch.rand(bs, 1) * (distance[1] - distance[0]) + distance[0]
     elif isinstance(distance, (int, float)):
         d = distance
     return F.normalize(torch.randn(bs, 3)) * d
+
 
 def piecewise_linear_channelwise(x, xp, yp):
     """
@@ -382,6 +391,7 @@ class ASPP(nn.Module):
         feats = [F.relu(branch(x)) for branch in self.branches]
         return self.proj(torch.cat(feats, dim=1))
 
+
 class DepthAwareScatter(nn.Module):
     def __init__(self, in_ch, base_ch=32, alpha_max=0.4):
         super().__init__()
@@ -404,38 +414,37 @@ class DepthAwareScatter(nn.Module):
         nn.init.kaiming_normal_(self.scatter_conv.weight, nonlinearity="relu")  # no scatter initially
         nn.init.zeros_(self.scatter_conv.bias)
 
-
     def forward(self, mu, dz=1.0):
         # mu: [B,C,D,H,W], I0 = 1
         B, C, D, H, W = mu.shape
 
         # integrate attenuation
-        tau_z = torch.cumsum(mu * dz, dim=2)           # [B,C,D,H,W]
-        I_z   = torch.exp(-tau_z)                           # [B,C,D,H,W]
-        I_primary = I_z[:, :, -1]                           # [B,C,H,W]
+        tau_z = torch.cumsum(mu * dz, dim=2)  # [B,C,D,H,W]
+        I_z = torch.exp(-tau_z)  # [B,C,D,H,W]
+        I_primary = I_z[:, :, -1]  # [B,C,H,W]
 
         # scatter source per depth
-        S_z = mu * dz * I_z                            # [B,C,D,H,W]
+        S_z = mu * dz * I_z  # [B,C,D,H,W]
 
         # depth-aware weighting (causal conv along D)
         # reshape to [B*H*W, C, D]
         S_z_perm = S_z.permute(0, 3, 4, 1, 2).contiguous()  # [B,H,W,C,D]
-        S_z_flat = S_z_perm.view(-1, C, D)                  # [B*H*W, C, D]
-        S_w = self.depth_conv(S_z_flat)                     # [B*H*W, C, D]
+        S_z_flat = S_z_perm.view(-1, C, D)  # [B*H*W, C, D]
+        S_w = self.depth_conv(S_z_flat)  # [B*H*W, C, D]
         S_w = S_w.view(B, H, W, C, D).permute(0, 3, 4, 1, 2)  # [B,C,D,H,W]
-        S = S_w.sum(dim=2)                                  # [B,C,H,W]
+        S = S_w.sum(dim=2)  # [B,C,H,W]
 
         # conditioning features
-        tau_exit = tau_z[:, :, -1]                          # [B,C,H,W]
-        feats = torch.cat([I_primary, tau_exit], dim=1)     # [B,2C,H,W]
-        F0 = F.relu(self.enc(feats))                        # [B,base,H,W]
+        tau_exit = tau_z[:, :, -1]  # [B,C,H,W]
+        feats = torch.cat([I_primary, tau_exit], dim=1)  # [B,2C,H,W]
+        F0 = F.relu(self.enc(feats))  # [B,base,H,W]
 
         # ASPP context
-        F_aspp = self.aspp(F0)                              # [B,base,H,W]
+        F_aspp = self.aspp(F0)  # [B,base,H,W]
 
         # scatter map
-        scatter_in = torch.cat([S, F_aspp], dim=1)          # [B,C+base,H,W]
-        scatter_map = F.relu(self.scatter_conv(scatter_in)) # [B,1,H,W]
+        scatter_in = torch.cat([S, F_aspp], dim=1)  # [B,C+base,H,W]
+        scatter_map = F.relu(self.scatter_conv(scatter_in))  # [B,1,H,W]
 
         # alpha gate
         alpha = torch.sigmoid(self.alpha_head(F_aspp)) * self.alpha_max
@@ -444,7 +453,8 @@ class DepthAwareScatter(nn.Module):
         I_out = I_primary + alpha * scatter_map
         return I_out, I_primary, scatter_map, alpha
 
-#%%
+
+# %%
 class VolumeRaycaster(nn.Module):
     def __init__(
             self,
@@ -466,14 +476,15 @@ class VolumeRaycaster(nn.Module):
             '''
         super().__init__()
         self.density_factor = density_factor
-        self.ray_samples    = ray_samples
+        self.ray_samples = ray_samples
         self.use_checkpointing = use_checkpointing
         self.use_beer_lambert = use_beer_lambert
         self.scatter = None
         self.i0 = i0
         if isinstance(resolution, tuple):
-              self.w, self.h = resolution
-        else: self.w, self.h = resolution, resolution
+            self.w, self.h = resolution
+        else:
+            self.w, self.h = resolution, resolution
 
         # Z = torch.linspace(-1, 1, ray_samples)
         # W = torch.linspace(-1, 1, self.w)
@@ -481,7 +492,6 @@ class VolumeRaycaster(nn.Module):
         # self.samples = self.get_coord_grid(Z, H, W, perspective=True)
         self.register_buffer('dirs_cam', torch.empty(self.h, self.w, 3), persistent=False)
         self.triton_raycaster = FusedVolumeRenderer(self.ray_samples, self.density_factor, self.apply_poisson)
-
 
         if scatter is not None:
             self.scatter_channels = scatter
@@ -544,7 +554,6 @@ class VolumeRaycaster(nn.Module):
             camera_matrix = torch.tensor(camera_matrix, dtype=torch.float32)
         if not isinstance(ijk2ras, torch.Tensor):
             ijk2ras = torch.tensor(ijk2ras, dtype=torch.float32)
-
 
         # Handle both batched and single camera matrices
         is_batched = camera_matrix.ndim == 3
@@ -615,21 +624,21 @@ class VolumeRaycaster(nn.Module):
         return near, far
 
     def generate_vtk_ray_samples_ijk(self,
-            vol_shape,  # (W, H, D) volume shape in voxels
-            ras2ijk: torch.Tensor,  # 4x4 RAS to IJK transform
-            view_mat: torch.Tensor,
-            fov_y_deg: float,  # vertical FOV in degrees (VTK's ViewAngle)
-            img_size: tuple,  # (height_px, width_px) in pixels
-            n_depth: int,  # number of samples along each ray
-            near: torch.Tensor,  # near plane (distance along view dir, in mm or RAS units)
-            far: torch.Tensor  # far plane (distance along view dir)
-    ) -> torch.Tensor:
+                                     vol_shape,  # (W, H, D) volume shape in voxels
+                                     ras2ijk: torch.Tensor,  # 4x4 RAS to IJK transform
+                                     view_mat: torch.Tensor,
+                                     fov_y_deg: float,  # vertical FOV in degrees (VTK's ViewAngle)
+                                     img_size: tuple,  # (height_px, width_px) in pixels
+                                     n_depth: int,  # number of samples along each ray
+                                     near: torch.Tensor,  # near plane (distance along view dir, in mm or RAS units)
+                                     far: torch.Tensor  # far plane (distance along view dir)
+                                     ) -> torch.Tensor:
         """
         Generate 3D sample coordinates in IJK space, cast as rays from camera through pixels in the image plane,
         compatible with VTK conventions and an arbitrary RAS2IJK matrix.
         Returns: Tensor of shape (H, W, n_depth, 3), the IJK coordinates along each ray.
         """
-        start= timer()
+        start = timer()
         device = view_mat.device if isinstance(view_mat, torch.Tensor) else "cpu"
         vol_shape = torch.as_tensor(vol_shape, device=device)
         H, W = img_size
@@ -679,16 +688,15 @@ class VolumeRaycaster(nn.Module):
 
         return ijk_coords  # (B,D,H,W,3)
 
-
     def get_camera_matrix(self, look_from):
-        nu  = F.normalize(look_from)
-        old = torch.tensor([0, 0, 1.0], dtype=nu.dtype, device=nu.device).expand(nu.size(0),-1)
-        k  = (old + nu) / 2
-        kc = k.unsqueeze(-1) # Column vector
-        kr = kc.permute(0,2,1)               # Row vector
+        nu = F.normalize(look_from)
+        old = torch.tensor([0, 0, 1.0], dtype=nu.dtype, device=nu.device).expand(nu.size(0), -1)
+        k = (old + nu) / 2
+        kc = k.unsqueeze(-1)  # Column vector
+        kr = kc.permute(0, 2, 1)  # Row vector
 
-        R = 2* (torch.matmul(kc, kr) / (k*k).sum(1).view(-1,1,1)) - torch.eye(3).expand(nu.size(0), -1,-1)
-        R[torch.isnan(R).sum(dim=(1,2)).bool()] = torch.flip(torch.eye(3, dtype=nu.dtype, device=nu.device), [0])
+        R = 2 * (torch.matmul(kc, kr) / (k * k).sum(1).view(-1, 1, 1)) - torch.eye(3).expand(nu.size(0), -1, -1)
+        R[torch.isnan(R).sum(dim=(1, 2)).bool()] = torch.flip(torch.eye(3, dtype=nu.dtype, device=nu.device), [0])
         return R
 
     def apply_poisson(self, transmission: torch.Tensor) -> torch.Tensor:
@@ -847,18 +855,18 @@ class VolumeRaycaster(nn.Module):
 
 
 if __name__ == '__main__':
-    from monai.transforms import LoadImage, EnsureType, EnsureChannelFirst, ScaleIntensity, Compose, Spacing, \
-    NormalizeIntensity, CenterSpatialCrop, RandAffine, ScaleIntensityRange
+    from monai.transforms import LoadImage, EnsureType, EnsureChannelFirst, Compose, Spacing, \
+        ScaleIntensityRange
     from matplotlib import pyplot as plt
     from torch.profiler import profile, record_function, ProfilerActivity
     from torch.autograd import gradcheck
 
     import torch._inductor.config as cfg
+
     cfg.cpp.vec_isa_ok = False
 
     torch.backends.cuda.matmul.allow_tf32 = True
     torch.backends.cudnn.allow_tf32 = True
-
 
     load_tf = Compose([
         LoadImage(),
@@ -899,11 +907,10 @@ if __name__ == '__main__':
     center = ijk2ras @ center
     print(center[:3])
 
-    ren = VolumeRaycaster(scatter=None, resolution=(1024,1024), i0=None, ray_samples=384).cuda().eval()
+    ren = VolumeRaycaster(scatter=None, resolution=(1024, 1024), i0=None, ray_samples=384).cuda().eval()
     # ren = torch.compile(ren)
     # vol = torch.rand(8, 1, 128, 128, 128).cuda()
     # vol.requires_grad_(True)
-
 
     view_mat = get_vtk_view_mat((0., 1000, -130.),
                                 center[:3],
@@ -920,17 +927,17 @@ if __name__ == '__main__':
     out = ren(mu.expand(1, 8, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk)
     torch.cuda.synchronize()
     end = timer()
-    print(out.shape, end-start)
+    print(out.shape, end - start)
 
     plt.figure()
-    plt.imshow(out[0,0].detach().cpu().numpy(), cmap='gray')
+    plt.imshow(out[0, 0].detach().cpu().numpy(), cmap='gray')
     plt.show()
 
     start = timer()
     out = ren(mu.expand(1, 8, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk)
     torch.cuda.synchronize()
     end = timer()
-    print(out.shape, end-start)
+    print(out.shape, end - start)
 
     for _ in range(10):
         with torch.no_grad():
@@ -942,7 +949,7 @@ if __name__ == '__main__':
         out_old = ren(mu.expand(1, 8, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
         print(f'Old and Triton match: {torch.allclose(out_old, out_triton, atol=1e-4)}')
         print(f'Old and Triton Max: {(out_old - out_triton).abs().max()}, Mean: {(out_old - out_triton).abs().mean()}')
-        fig, ax = plt.subplots(1,3)
+        fig, ax = plt.subplots(1, 3)
         ax[0].imshow(out_old[0, 0].detach().cpu().numpy(), cmap='gray')
         ax[1].imshow(out_triton[0, 0].detach().cpu().numpy(), cmap='gray')
         im = ax[2].imshow((out_old - out_triton)[0, 0].detach().cpu().numpy(), cmap='coolwarm')
@@ -953,10 +960,10 @@ if __name__ == '__main__':
 
     ren.eval()
     with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=False,
-        profile_memory=False,
-        with_stack=False,  # True adds overhead, only enable for deep dives
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=False,
+            profile_memory=False,
+            with_stack=False,  # True adds overhead, only enable for deep dives
     ) as prof:
         for _ in range(10):  # enough iterations to smooth noise
             with record_function("vmap_forward"):
@@ -994,7 +1001,6 @@ if __name__ == '__main__':
 
     # ren = VolumeRaycaster(scatter=None, ray_samples=512, resolution=(1024,1024), i0=1e2).cuda().eval()
 
-
     print("############ Triton Version ############")
 
     start = timer()
@@ -1003,7 +1009,7 @@ if __name__ == '__main__':
     end = timer()
     torch.cuda.synchronize()
     end = timer()
-    print(out.shape, end-start)
+    print(out.shape, end - start)
 
     with torch.no_grad():
         _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
@@ -1012,10 +1018,10 @@ if __name__ == '__main__':
         out = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
         torch.cuda.synchronize()
         end = timer()
-        print(out.shape, end-start)
+        print(out.shape, end - start)
 
     plt.figure()
-    plt.imshow(out[0,0].detach().cpu().numpy(), cmap='gray')
+    plt.imshow(out[0, 0].detach().cpu().numpy(), cmap='gray')
     plt.show()
 
     for _ in range(10):
@@ -1025,10 +1031,10 @@ if __name__ == '__main__':
 
     ren.eval()
     with profile(
-        activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
-        record_shapes=False,
-        profile_memory=False,
-        with_stack=False,  # True adds overhead, only enable for deep dives
+            activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+            record_shapes=False,
+            profile_memory=False,
+            with_stack=False,  # True adds overhead, only enable for deep dives
     ) as prof:
         for _ in range(10):  # enough iterations to smooth noise
             with record_function("triton_forward"):
@@ -1045,7 +1051,6 @@ if __name__ == '__main__':
     # torch.cuda.synchronize()
     # end = timer()
     # print(end-start)
-
 
     print(torch.cuda.memory_summary())
 
@@ -1097,7 +1102,7 @@ if __name__ == '__main__':
         print(
             f'Triton Max bf16/32: {(out_triton_fp32 - out_triton_bf16).abs().max()}, Mean: {(out_triton_fp32 - out_triton_bf16).abs().mean()}')
 
-    ren = VolumeRaycaster(scatter=None, resolution=(512,512), i0=None).cuda()
+    ren = VolumeRaycaster(scatter=None, resolution=(512, 512), i0=None).cuda()
 
     torch.manual_seed(0)
     mu = torch.randn(2, 8, 24, 16, device='cuda', dtype=torch.float64, requires_grad=True)
@@ -1116,5 +1121,3 @@ if __name__ == '__main__':
         fast_mode=True,
     )
     print("gradcheck passed:", ok)
-
-
