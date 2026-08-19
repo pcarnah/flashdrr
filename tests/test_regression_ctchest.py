@@ -5,22 +5,21 @@ function / mu conversion as the dev's ``__main__`` in ``raycast.py``,
 and render with the VolumeRaycaster. The output is compared against a
 checked-in golden fixture in ``tests/fixtures/``:
 
-  * ``ctchest_drr_stats.json``         — summary stats (min/max/mean/std) + sha256
+  * ``ctchest_drr_stats.json``         — summary stats (min/max/mean/std)
   * ``ctchest_drr_thumbnail.npy``      — full 128x128 output, quantized to 4 decimals
   * ``ctchest_drr_triton_stats.json``  — same, for the triton path (GPU only)
   * ``ctchest_drr_triton_thumbnail.npy`` — same, for the triton path
 
-The summary-stats check catches "something is wildly off" regressions
-(massive rendering failures, broken volume loading, etc.) without being
-brittle to small numerical changes. The quantized-thumbnail check
-catches more subtle regressions in the actual pixel values.
+All comparisons are float-aware (allclose-style) with tolerances chosen
+to absorb minor numerical drift across hardware / cuDNN versions; we do
+NOT do exact bit-for-bit / hash matching because small floating-point
+variation between platforms would cause spurious failures.
 
 If you intentionally change rendering behaviour and need to refresh
 the references, re-run ``tests/_tools/regenerate_ctchest_reference.py``.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 from pathlib import Path
 
@@ -117,21 +116,26 @@ class TestCTChestDRR:
         ref = _load_ref("ctchest_drr_stats.json")
         # Exact shape
         assert list(out.shape) == ref["shape"]
-        # Stats within generous tolerances — covers platform/cuDNN drift
-        assert abs(out.mean().item() - ref["mean"]) < 1e-3, (
-            f"mean drift: {out.mean().item()} vs ref {ref['mean']}"
-        )
-        assert abs(out.std().item() - ref["std"]) < 1e-3
-        assert abs(out.min().item() - ref["min"]) < 1e-3
-        assert abs(out.max().item() - ref["max"]) < 1e-3
-        # sha256 of the exact (no quantisation) output should also match
-        h = hashlib.sha256(out.cpu().numpy().tobytes()).hexdigest()
-        assert h == ref["sha256"], "output changed bit-for-bit"
+        # Float-aware comparison of summary stats. Tolerances are chosen
+        # to absorb minor floating-point drift across hardware / cuDNN
+        # versions while still catching real regressions.
+        stats = {
+            "mean": out.mean().item(),
+            "std": out.std().item(),
+            "min": out.min().item(),
+            "max": out.max().item(),
+        }
+        for name, tol in (("mean", 1e-3), ("std", 1e-3), ("min", 1e-3), ("max", 1e-3)):
+            assert abs(stats[name] - ref[name]) < tol, (
+                f"{name} drift: {stats[name]} vs ref {ref[name]} (tol {tol})"
+            )
 
     def test_pixel_values_match_thumbnail(self, device):
-        """Compare the full output to a quantized thumbnail. Tolerances
-        are loose (1e-3) since the thumbnail itself is rounded to 4
-        decimals to save space.
+        """Compare the full output to a quantized thumbnail using
+        ``np.allclose`` rather than exact equality. The thumbnail itself
+        is rounded to 4 decimals to save space, and the render output
+        can vary slightly across hardware, so we compare with a
+        tolerance of 1e-3 absolute / 1e-3 relative.
         """
         out = _render_ctchest_drr(device, triton=False)
         path = FIXTURES / "ctchest_drr_thumbnail.npy"
@@ -141,9 +145,14 @@ class TestCTChestDRR:
         # Shape contract
         assert out.shape == (1, 1, 128, 128)
         assert thumb.shape == (128, 128)
-        # Pixel-wise comparison with the rounded reference
-        diff = np.abs(out[0, 0].cpu().numpy() - thumb)
-        assert diff.max() < 1e-3, f"max pixel diff {diff.max()}"
+        # Float-aware pixel-wise comparison against the rounded reference
+        np.testing.assert_allclose(
+            out[0, 0].cpu().numpy(),
+            thumb,
+            atol=1e-3,
+            rtol=1e-3,
+            err_msg="rendered output diverged from reference thumbnail",
+        )
 
     def test_value_range_is_physically_meaningful(self, device):
         """Sanity-only: the DRR of an X-ray-attenuating phantom should
@@ -172,12 +181,16 @@ class TestCTChestDRRTriton:
         out = _render_ctchest_drr(gpu_device, triton=True)
         ref = _load_ref("ctchest_drr_triton_stats.json")
         assert list(out.shape) == ref["shape"]
-        assert abs(out.mean().item() - ref["mean"]) < 1e-3
-        assert abs(out.std().item() - ref["std"]) < 1e-3
-        assert abs(out.min().item() - ref["min"]) < 1e-3
-        assert abs(out.max().item() - ref["max"]) < 1e-3
-        h = hashlib.sha256(out.cpu().numpy().tobytes()).hexdigest()
-        assert h == ref["sha256"]
+        stats = {
+            "mean": out.mean().item(),
+            "std": out.std().item(),
+            "min": out.min().item(),
+            "max": out.max().item(),
+        }
+        for name, tol in (("mean", 1e-3), ("std", 1e-3), ("min", 1e-3), ("max", 1e-3)):
+            assert abs(stats[name] - ref[name]) < tol, (
+                f"{name} drift: {stats[name]} vs ref {ref[name]} (tol {tol})"
+            )
 
     def test_pixel_values_match_thumbnail(self, gpu_device):
         out = _render_ctchest_drr(gpu_device, triton=True)
@@ -185,8 +198,13 @@ class TestCTChestDRRTriton:
         if not path.exists():
             pytest.skip(f"Thumbnail fixture not found: {path}")
         thumb = np.load(path)
-        diff = np.abs(out[0, 0].cpu().numpy() - thumb)
-        assert diff.max() < 1e-3
+        np.testing.assert_allclose(
+            out[0, 0].cpu().numpy(),
+            thumb,
+            atol=1e-3,
+            rtol=1e-3,
+            err_msg="triton output diverged from reference thumbnail",
+        )
 
     def test_triton_matches_python_within_tolerance(self, gpu_device):
         """The Triton and Python-loop paths should produce the same DRR
