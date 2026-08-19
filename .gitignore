@@ -6,3 +6,7 @@ docs/_build
 .idea/
 .ipynb_checkpoints/
 .virtual_documents/
+.junie
+
+uv.lock
+kilo.json
