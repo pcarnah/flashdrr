@@ -18,25 +18,81 @@ __all__ = ['homogenize_mat', 'homogenize_vec', 'get_proj_mat', 'get_view_mat', '
 
 
 def homogenize_mat(mat):
-    ''' Adds a row (bottom) and column (right) to the matrix `mat` with all zeros and a 1 in the lower right corner.
-    Is used to make the matrix work as transformation for homogeneous coordinates. '''
+    """Embed a linear-transform matrix in homogeneous coordinates.
+
+    Given an ``(..., N, M)`` matrix, returns a tensor of shape
+    ``(..., N+1, M+1)`` whose top-left ``(N, M)`` block is the input, whose
+    extra bottom row and right column are zeros, and whose ``[..., N, M]``
+    entry is 1. The result can then be used as a transformation for
+    homogeneous coordinates ``[x; 1]``.
+
+    The implementation supports both unbatched (2D) and arbitrarily batched
+    inputs. For batched inputs a fresh per-batch identity template is
+    allocated (no shared storage), so the function is safe under autograd
+    and across hardware.
+
+    Args:
+        mat (Tensor): Input matrix of shape ``(N, M)`` or ``(..., N, M)``.
+
+    Returns:
+        Tensor: Homogeneous matrix of shape ``(N+1, M+1)`` or
+        ``(..., N+1, M+1)``, with the same dtype and device as ``mat``.
+    """
     assert torch.is_tensor(mat)
-    ret = torch.eye(mat.size(-1) + 1, dtype=mat.dtype, device=mat.device)
+    rows, cols = mat.size(-2), mat.size(-1)
     if mat.ndim > 2:
-        flat_mat = mat.view(-1, mat.size(-2), mat.size(-1))
+        # Flatten the leading batch dims, build a per-batch identity+zero
+        # template, and copy the input into the top-left block. Allocating
+        # a fresh tensor (instead of `.expand`-ing an eye) is required for
+        # batched inputs: in-place writes into expanded storage would be
+        # applied across every batch element at once.
+        flat_mat = mat.reshape(-1, rows, cols)
         num_mats = flat_mat.size(0)
-        ret = ret[None].expand(num_mats, -1, -1)
+        out = torch.zeros(num_mats, rows + 1, cols + 1, dtype=mat.dtype, device=mat.device)
+        out[..., rows, cols] = 1.0
+        out[..., :rows, :cols] = flat_mat
     else:
-        flat_mat = mat
-    ret[..., :mat.size(-2), :mat.size(-1)] = flat_mat
-    return ret.reshape(*mat.shape[:-2], mat.size(-2) + 1, mat.size(-1) + 1)
+        out = torch.eye(rows + 1, dtype=mat.dtype, device=mat.device)
+        out[:rows, :cols] = mat
+    return out.reshape(*mat.shape[:-2], rows + 1, cols + 1)
 
 
 def homogenize_vec(vec, dim=None):
-    ''' Adds an additional component to `vec` with value 1 to make it a homogeneous coordinate. '''
-    assert torch.is_tensor(vec) and 3 in vec.shape
-    if dim is None: dim = vec.ndim - list(reversed(vec.shape)).index(3) - 1
-    ad_shape = list(vec.shape);
+    """Append a 1 to ``vec`` to make it a homogeneous coordinate.
+
+    The new component is added along ``dim`` (or, by default, the (last)
+    dim of size 3 in ``vec``). The 1-tensor is broadcast to match ``vec``'s
+    shape along all other dims, so the function works for any rank
+    (1D ``(3,)``, 2D ``(B, 3)``, 3D ``(B, 3, H)``, etc.).
+
+    Args:
+        vec (Tensor): Input tensor with a dim of size 3 somewhere in its
+            shape. All other dims may be arbitrary (including batch dims).
+        dim (int, optional): Index of the size-3 dim along which to append
+            the 1. If ``None`` (default), the last size-3 dim is used.
+
+    Returns:
+        Tensor: Same shape as ``vec`` except along ``dim``, which grows
+        from 3 to 4. Dtype and device are inherited from ``vec``.
+
+    Raises:
+        ValueError: If ``dim`` is given but is not a size-3 dim, or if
+            ``vec`` has no dim of size 3 and ``dim`` is ``None``.
+    """
+    assert torch.is_tensor(vec)
+    if dim is None:
+        try:
+            dim = vec.ndim - list(reversed(vec.shape)).index(3) - 1
+        except ValueError as e:
+            raise ValueError(
+                f"homogenize_vec: no dim of size 3 found in shape {tuple(vec.shape)}; "
+                "pass `dim` explicitly"
+            ) from e
+    elif vec.size(dim) != 3:
+        raise ValueError(
+            f"homogenize_vec: dim={dim} has size {vec.size(dim)}, expected 3"
+        )
+    ad_shape = list(vec.shape)
     ad_shape[dim] = 1
     nu = torch.ones(ad_shape, dtype=vec.dtype, device=vec.device)
     return torch.cat([vec, nu], dim=dim)

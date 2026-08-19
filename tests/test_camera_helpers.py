@@ -42,11 +42,33 @@ class TestHomogenizeMat:
         assert H[:3, 3].tolist() == [0.0, 0.0, 0.0]
 
     def test_batched_input(self):
-        # NOTE: there's an upstream bug in `homogenize_mat` for batched input
-        # where the eye-initialised output is `.expand`-ed (shared storage)
-        # and the in-place copy from `flat_mat` then collides. This is a
-        # known issue in raycast.py:34; we don't test the broken path here.
-        pytest.skip("homogenize_mat has a known bug with batched input")
+        # (B, N, M) — used to write into `.expand`-shared storage, which
+        # silently corrupted every batch element to the last one. Make
+        # sure each batch is independent and top-left block is preserved.
+        M = torch.tensor([
+            [[1.0, 0.0, 0.0], [0.0, 2.0, 0.0], [0.0, 0.0, 3.0]],
+            [[4.0, 0.0, 0.0], [0.0, 5.0, 0.0], [0.0, 0.0, 6.0]],
+        ])
+        H = homogenize_mat(M)
+        assert H.shape == (2, 4, 4)
+        # Each batch's top-left block equals its input
+        assert torch.equal(H[0, :3, :3], M[0])
+        assert torch.equal(H[1, :3, :3], M[1])
+        # All batches should still have the homogeneous 1 and zeros
+        for b in range(2):
+            assert H[b, 3, 3].item() == 1.0
+            assert H[b, 3, :3].tolist() == [0.0, 0.0, 0.0]
+            assert H[b, :3, 3].tolist() == [0.0, 0.0, 0.0]
+
+    def test_higher_rank_batched_input(self):
+        # (B1, B2, N, M) — leading batch dims are flattened then re-shaped
+        M = torch.randn(2, 3, 3, 3)
+        H = homogenize_mat(M)
+        assert H.shape == (2, 3, 4, 4)
+        # Check a couple of arbitrary batch entries
+        assert torch.equal(H[0, 1, :3, :3], M[0, 1])
+        assert torch.equal(H[1, 2, :3, :3], M[1, 2])
+        assert (H[..., 3, 3] == 1.0).all()
 
     def test_2d_input_works(self):
         # Sanity that the unbatched path is unaffected by the bug.
@@ -79,10 +101,12 @@ class TestHomogenizeVec:
         assert torch.equal(h[:, :-1], v)
 
     def test_explicit_dim(self):
+        # (2, 3, 4): dim=1 is the size-3 dim. After appending a 1 along it,
+        # the shape becomes (2, 4, 4).
         v = torch.zeros(2, 3, 4)
-        h = homogenize_vec(v, dim=2)
-        assert h.shape == (2, 3, 5)
-        assert h[0, 0, -1].item() == 1.0
+        h = homogenize_vec(v, dim=1)
+        assert h.shape == (2, 4, 4)
+        assert h[0, -1, 0].item() == 1.0
 
 
 # ---------------------------------------------------------------------------
