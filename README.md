@@ -48,6 +48,32 @@ pip install flashdrr[cu130] --extra-index-url https://download.pytorch.org/whl/c
 The Triton-fused renderer requires a working Triton installation (the
 `triton-windows` fork is used automatically on Windows).
 
+### Using uv
+[uv](https://docs.astral.sh/uv/) is supported. CUDA build
+selection uses the same `cu128` / `cu130` / `cpu` extras as with pip — pick
+one and the matching PyTorch index is
+selected automatically via `[tool.uv.sources]`:
+
+```bash
+uv sync --extra cu128
+uv sync --extra cu130
+uv sync --extra cpu
+```
+
+Dev-only tooling (e.g. `pytest`) lives in PEP 735 dependency groups, which
+must not share names with the CUDA extras — add them with `--group`:
+
+```bash
+uv sync --extra cu130 --group test
+```
+
+The optional `data` extra (NIfTI file support) is just another extra
+and combines with a CUDA extra:
+
+```bash
+uv sync --extra cu128 --extra data
+```
+
 ## Quick example
 ```python
 import torch
