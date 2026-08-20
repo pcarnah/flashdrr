@@ -29,7 +29,7 @@ pose estimation, and synthetic‑image generation from medical volumes.
 The following trends summarize head-to-head measurements of
 `VolumeRaycaster` (PyTorch `grid_sample` based) against the Triton-fused
 `FusedVolumeRenderer` across resolutions, ray-sample counts, and volume
-sizes.
+sizes. All tests performed using an RTX 5070Ti 16GB.
 
 <a href="benchmarks/plots/benchmark_analysis.svg">
   <img src="benchmarks/plots/benchmark_analysis.svg"
@@ -57,7 +57,7 @@ sizes.
 2. **Time Scaling: Sub-Linear Latency vs. Memory-Wall Thrashing**
    * **Extreme Acceleration:** At $2048 \times 2048$ resolution
      (256 samples, eval), Triton reduces iteration time from
-     3,690.4 ms to 11.8 ms — a $314\times$ speedup.
+     1,804.32 ms to 9.16 ms — a $197\times$ speedup.
    * **Non-Linear Degradation without Triton:** Beyond
      $1024 \times 1024$, standard PyTorch execution time degrades
      super-linearly due to memory bandwidth limits and cache
@@ -66,25 +66,25 @@ sizes.
 
 3. **Train vs. Eval Dynamics**
    * **Memory Overhead:** Without Triton, evaluation and training both
-     consume massive memory ($\approx 6.25$ GB at $1024 \times 1024$).
-     With Triton, training memory increases only slightly over
-     evaluation (e.g., 115.2 MiB train vs 92.9 MiB eval at 256
-     samples) due to lightweight gradient buffer retention.
-   * **Backward Pass Latency:** Training mode adds a larger relative
-     compute penalty in Triton than in standard PyTorch (~$5.5\times$
-     overhead vs ~$1.35\times$ at $1024 \times 1024$). This stems
-     from executing backward gradient kernels for custom operators,
-     though Triton train step time (23.5 ms) remains dramatically
-     faster than non-Triton eval time (55.9 ms).
+      consume massive memory ($\approx 12.4$ GB at $1024\times 1024$ with
+      512 samples). With Triton, training memory increases only slightly
+      over evaluation (121.6 MiB train vs 110.7 MiB eval) due to lightweight
+      gradient buffer retention.
+     * **Backward Pass Latency:** Training mode adds a larger relative
+       compute penalty in Triton than in standard PyTorch (~$3.05\times$ overhead vs ~$1.31\times$
+       at $1024\times 1024$, 512 samples). This stems
+       from executing backward gradient kernels for custom operators,
+       though Triton train step time (15.4 ms) remains dramatically
+       faster than non-Triton eval time (82.0 ms).
 
 ### Configuration snapshot (1024×1024, 256 samples)
 
-| Configuration (1024×1024, 256 samples) | Triton OFF | Triton ON | Improvement |
-| --- | ---: | ---: | --- |
-| Eval Memory (MiB)        | 6,254.9 | 92.9  | $67.3\times$ less |
-| Train Memory (MiB)       | 6,247.2 | 115.2 | $54.2\times$ less |
-| Eval Latency (ms/iter)   | 55.9    | 4.21  | $13.3\times$ faster |
-| Train Latency (ms/iter)  | 75.37   | 23.50 | $3.2\times$ faster  |
+| Configuration (1024×1024, 512 samples) | Triton OFF | Triton ON | Improvement         |
+|----------------------------------------|-----------:| ---: |---------------------|
+| Eval Memory (MiB)                      |   12,386.7 | 110.7  | $111.9\times$ less  |
+| Train Memory (MiB)                     |   12,409.6 | 115.2 | $102.1\times$ less  |
+| Eval Latency (ms/iter)                 |      82.00 | 5.05  | $16.2\times$ faster |
+| Train Latency (ms/iter)                |     107.34 | 15.40 | $7.0\times$ faster  |
 
 ## Installation Instructions
 The project is not yet released to PyPI.
