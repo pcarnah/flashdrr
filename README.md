@@ -25,14 +25,17 @@ pose estimation, and synthetic‑image generation from medical volumes.
   helpers (`make_nd`), HU normalization, and voxel‑scale handling.
 
 ## Installation Instructions
-The latest GitHub release is pushed to PyPI:
-```
-pip install flashdrr
-```
+The project is not yet released to PyPI.
+
+[//]: # (```)
+
+[//]: # (pip install flashdrr)
+
+[//]: # (```)
 
 To get the latest master:
 ```
-pip install git+https://github.com/torchvtk/torchvtk.git@master#egg=flashdrr
+pip install git+https://github.com/pcarnah/flashdrr.git@master#egg=flashdrr
 ```
 
 ### CUDA builds
@@ -96,8 +99,6 @@ drr = raycaster(vol.cuda(), view_mat=view_mat, ras2ijk=ras2ijk.cuda())
 ```
 
 ## Optional dependencies
-* `nibabel` — required only for the medical‑decathlon crawler scripts
+* `nibabel` — required only for loading Nifti format data for tests and example scripts
   (`flashdrr[data]`).
 
-Please refer to the [documentation](https://torchvtk.github.io) for guides and
-the full API reference.
