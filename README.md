@@ -77,7 +77,7 @@ sizes. All tests performed using an RTX 5070Ti 16GB.
        though Triton train step time (15.4 ms) remains dramatically
        faster than non-Triton eval time (82.0 ms).
 
-### Configuration snapshot (1024×1024, 256 samples)
+### Configuration snapshot (1024×1024, 512 samples)
 
 | Configuration (1024×1024, 512 samples) | Triton OFF | Triton ON | Improvement         |
 |----------------------------------------|-----------:| ---: |---------------------|
