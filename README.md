@@ -164,3 +164,5 @@ drr = raycaster(vol.cuda(), view_mat=view_mat, ras2ijk=ras2ijk.cuda())
 * `nibabel` — required only for loading Nifti format data for tests and example scripts
   (`flashdrr[data]`).
 
+## Attribution
+If you use this software in your research, please cite it using the "Cite this repository" button or the provided CITATION.cff.
