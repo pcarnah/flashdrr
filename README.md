@@ -24,6 +24,68 @@ pose estimation, and synthetic‑image generation from medical volumes.
 * **Lightweight volume utilities** — `flashdrr.utils` provides dimension
   helpers (`make_nd`), HU normalization, and voxel‑scale handling.
 
+## Benchmark
+
+The following trends summarize head-to-head measurements of
+`VolumeRaycaster` (PyTorch `grid_sample` based) against the Triton-fused
+`FusedVolumeRenderer` across resolutions, ray-sample counts, and volume
+sizes.
+
+<a href="benchmarks/plots/benchmark_analysis.svg">
+  <img src="benchmarks/plots/benchmark_analysis.svg"
+       alt="Benchmark comparison of the PyTorch-loop VolumeRaycaster against the Triton-fused FusedVolumeRenderer. Left: peak GPU memory (MiB, log scale) versus ray-sample count across resolutions from 128x128 to 2048x2048, showing linear growth for the PyTorch backend (peaking at ~24.8 GB at 2048x2048, 256 samples) and a near-flat profile below ~430 MiB for Triton. Middle: per-iteration latency (ms, log scale) versus resolution, showing super-linear degradation for the PyTorch backend beyond 1024x1024 (3,690 ms at 2048x2048) and roughly linear scaling for Triton (11.8 ms at 2048x2048, a ~314x speedup). Right: train vs eval memory and latency at 1024x1024 with 256 samples, where Triton uses 92.9 MiB eval / 115.2 MiB train versus 6,254.9 / 6,247.2 MiB for PyTorch, and 4.21 ms eval / 23.50 ms train versus 55.9 / 75.37 ms for PyTorch."
+       width="900">
+</a>
+
+### Key Performance Trends
+
+1. **Memory Scaling: Linear Allocation vs. Near-Constant Footprint**
+   * **Without Triton:** Peak VRAM scales directly with total samples
+     ($\text{Rays} \times \text{Samples/Ray}$). At $2048 \times 2048$
+     resolution with 256 ray samples, peak memory hits 24.8 GB in
+     evaluation mode, leading to out-of-memory (OOM) failures at
+     $\geq 384$ samples.
+   * **With Triton:** Fused rendering kernels avoid materializing
+     intermediate ray-sample tensors in HBM. Memory footprint remains
+     below 430 MiB across all tested configurations — a 99.5% memory
+     reduction at high workloads.
+   * **Volume Size Impact:** Scaling volume grid resolution from
+     $128^3$ to $256^3$ adds a fixed baseline memory overhead
+     (~100–300 MiB) for tensor storage, but Triton's intermediate
+     sample memory remains invariant to volume size.
+
+2. **Time Scaling: Sub-Linear Latency vs. Memory-Wall Thrashing**
+   * **Extreme Acceleration:** At $2048 \times 2048$ resolution
+     (256 samples, eval), Triton reduces iteration time from
+     3,690.4 ms to 11.8 ms — a $314\times$ speedup.
+   * **Non-Linear Degradation without Triton:** Beyond
+     $1024 \times 1024$, standard PyTorch execution time degrades
+     super-linearly due to memory bandwidth limits and cache
+     thrashing. Triton maintains predictable linear scaling
+     proportional to total rays rendered.
+
+3. **Train vs. Eval Dynamics**
+   * **Memory Overhead:** Without Triton, evaluation and training both
+     consume massive memory ($\approx 6.25$ GB at $1024 \times 1024$).
+     With Triton, training memory increases only slightly over
+     evaluation (e.g., 115.2 MiB train vs 92.9 MiB eval at 256
+     samples) due to lightweight gradient buffer retention.
+   * **Backward Pass Latency:** Training mode adds a larger relative
+     compute penalty in Triton than in standard PyTorch (~$5.5\times$
+     overhead vs ~$1.35\times$ at $1024 \times 1024$). This stems
+     from executing backward gradient kernels for custom operators,
+     though Triton train step time (23.5 ms) remains dramatically
+     faster than non-Triton eval time (55.9 ms).
+
+### Configuration snapshot (1024×1024, 256 samples)
+
+| Configuration (1024×1024, 256 samples) | Triton OFF | Triton ON | Improvement |
+| --- | ---: | ---: | --- |
+| Eval Memory (MiB)        | 6,254.9 | 92.9  | $67.3\times$ less |
+| Train Memory (MiB)       | 6,247.2 | 115.2 | $54.2\times$ less |
+| Eval Latency (ms/iter)   | 55.9    | 4.21  | $13.3\times$ faster |
+| Train Latency (ms/iter)  | 75.37   | 23.50 | $3.2\times$ faster  |
+
 ## Installation Instructions
 The project is not yet released to PyPI.
 

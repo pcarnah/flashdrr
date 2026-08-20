@@ -61,7 +61,6 @@ dependencies = [
     "torch >= 2.5",
     "torchvision >= 0.20",
     "numpy",
-    "matplotlib",
     "tqdm",
     "monai",
     "triton >= 2.1; sys_platform != 'win32'",
@@ -108,9 +107,14 @@ docs = [
     "myst-parser",
     "sphinx-rtd-theme",
 ]
+vis = [
+    "matplotlib",
+    "seaborn",
+    "pandas",
+]
 # Convenience: install everything optional (pick one CUDA variant first).
 all = [
-    "flashdrr[data, docs]",
+    "flashdrr[data, docs, vis]",
 ]
 
 [project.urls]
