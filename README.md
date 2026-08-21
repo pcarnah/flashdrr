@@ -7,8 +7,6 @@ keeping gradients flowing through both the volume and the camera parameters.
 It is designed for deep-learning workloads such as 2D/3D registration,
 pose estimation, and synthetic‑image generation from medical volumes.
 
-## [Documentation](https://torchvtk.github.io)
-
 ## Features
 * **Differentiable DRR raycasting** — `flashdrr.rendering.VolumeRaycaster`
   renders physically‑based DRRs using the Beer‑Lambert law with fully
@@ -87,13 +85,13 @@ sizes. All tests performed using an RTX 5070Ti 16GB.
 | Train Latency (ms/iter)                |     107.34 | 15.40 | $7.0\times$ faster  |
 
 ## Installation Instructions
-The project is not yet released to PyPI.
+The project is available via PyPI.
 
-[//]: # (```)
+```
 
-[//]: # (pip install flashdrr)
+pip install flashdrr
 
-[//]: # (```)
+```
 
 To get the latest master:
 ```
