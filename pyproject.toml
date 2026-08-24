@@ -103,7 +103,7 @@ data = [
     "nibabel",
 ]
 docs = [
-    "sphinx",
+    "sphinx<9",
     "myst-parser",
     "sphinx-rtd-theme",
     "sphinx-multiversion",

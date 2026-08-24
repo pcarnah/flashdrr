@@ -50,7 +50,10 @@ jobs:
           # the CUDA wheels and ~1 GB lighter. The [docs] extra's own deps
           # (sphinx, myst-parser, sphinx-rtd-theme, sphinx-multiversion) have
           # to be installed explicitly since --no-deps also skips them.
-          python -m pip install sphinx myst-parser sphinx-rtd-theme sphinx-multiversion
+          # sphinx is pinned to <9 because sphinx-multiversion 0.2.4 still
+          # calls the old Config.read(path, overrides) two-arg form, which
+          # Sphinx 9.0 removed (see sphinx-doc/sphinx#13633).
+          python -m pip install 'sphinx<9' myst-parser sphinx-rtd-theme sphinx-multiversion
           python -m pip install --no-deps -e "."
 
       - name: Build versioned site

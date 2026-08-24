@@ -88,6 +88,11 @@ html_sidebars = {
 # plus the main branch. Each version lands in its own subdirectory under
 # ``_build/html/<refname>/`` and the ``versioning.html`` sidebar template
 # produces a flyout menu linking them together.
+#
+# NOTE: sphinx-multiversion 0.2.4 (latest on PyPI) still calls
+# ``Config.read(path, overrides)`` with the two-arg form that Sphinx 9.0
+# removed (sphinx-doc/sphinx#13633). The [docs] extra in pyproject.toml
+# pins ``sphinx<9`` to keep this compatible.
 smv_tag_whitelist = r'^v?\d+\.\d+\.\d+$'
 smv_branch_whitelist = r'^(main|master)$'
 smv_remote_whitelist = r'^origin$'
