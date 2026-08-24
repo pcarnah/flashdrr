@@ -121,6 +121,7 @@ all = [
 Homepage = "https://github.com/pcarnah/flashdrr"
 Repository = "https://github.com/pcarnah/flashdrr.git"
 Issues = "https://github.com/pcarnah/flashdrr/issues"
+Documentation = "https://pcarnah.github.io/flashdrr/"
 
 [tool.setuptools]
 include-package-data = true

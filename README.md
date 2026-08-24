@@ -1,6 +1,14 @@
 # FlashDRR
 Fast differentiable DRR raycasting and volume rendering for PyTorch.
 
+[![PyPI](https://img.shields.io/pypi/v/flashdrr.svg)](https://pypi.org/project/flashdrr/)
+[![Documentation](https://img.shields.io/badge/docs-pcarnah.github.io%2Fflashdrr-blue.svg)](https://pcarnah.github.io/flashdrr/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
+Full API reference, guides, and the version switcher live at
+<https://pcarnah.github.io/flashdrr/>. Pick `stable`, `latest`, or any
+released tag from the dropdown in the top-right of every page.
+
 `FlashDRR` provides fast, differentiable raycasters that turn CT volumes into
 synthesized X‑ray projections (Digitally Reconstructed Radiographs, DRR) while
 keeping gradients flowing through both the volume and the camera parameters.
