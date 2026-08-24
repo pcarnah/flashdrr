@@ -136,17 +136,45 @@ def discover_tags() -> list[str]:
     return [line.strip() for line in out.stdout.splitlines() if line.strip()]
 
 
+def _prune_only() -> int:
+    index = load_index()
+    tags = discover_tags()
+    keep = {slugify(t.removeprefix("v")) for t in tags}
+    for v in (index.get("latest"), index.get("stable")):
+        if isinstance(v, str):
+            keep.add(v)
+    versions_dir = SITE_DIR / "versions"
+    for old in list(index["versions"].keys()):
+        if old not in keep:
+            old_path = versions_dir / old
+            if old_path.exists():
+                shutil.rmtree(old_path)
+            index["versions"].pop(old, None)
+    for alias in ("latest", "stable"):
+        if index.get(alias) not in index["versions"]:
+            index[alias] = None
+    if index.get("stable") and (versions_dir / index["stable"]).exists():
+        write_alias(versions_dir / index["stable"], SITE_DIR / "stable")
+    else:
+        (SITE_DIR / "stable").unlink(missing_ok=True)
+    if index.get("latest") and (versions_dir / index["latest"]).exists():
+        write_alias(versions_dir / index["latest"], SITE_DIR / "latest")
+    else:
+        (SITE_DIR / "latest").unlink(missing_ok=True)
+    save_index(index)
+    write_landing()
+    return 0
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument(
         "--alias",
-        required=True,
         choices=["latest", "stable"],
         help="Which alias slot to publish this build into.",
     )
     p.add_argument(
         "--version",
-        required=True,
         help="Human-readable version label (e.g. '0.1.0' or 'dev').",
     )
     p.add_argument(
@@ -167,33 +195,10 @@ def main() -> int:
     args = p.parse_args()
 
     if args.prune_only:
-        index = load_index()
-        tags = discover_tags()
-        keep = {slugify(t.removeprefix("v")) for t in tags}
-        for v in (index.get("latest"), index.get("stable")):
-            if isinstance(v, str):
-                keep.add(v)
-        versions_dir = SITE_DIR / "versions"
-        for old in list(index["versions"].keys()):
-            if old not in keep:
-                old_path = versions_dir / old
-                if old_path.exists():
-                    shutil.rmtree(old_path)
-                index["versions"].pop(old, None)
-        for alias in ("latest", "stable"):
-            if index.get(alias) not in index["versions"]:
-                index[alias] = None
-        if index.get("stable") and (versions_dir / index["stable"]).exists():
-            write_alias(versions_dir / index["stable"], SITE_DIR / "stable")
-        else:
-            (SITE_DIR / "stable").unlink(missing_ok=True)
-        if index.get("latest") and (versions_dir / index["latest"]).exists():
-            write_alias(versions_dir / index["latest"], SITE_DIR / "latest")
-        else:
-            (SITE_DIR / "latest").unlink(missing_ok=True)
-        save_index(index)
-        write_landing()
-        return 0
+        return _prune_only()
+
+    if not args.alias or not args.version:
+        p.error("--alias and --version are required unless --prune-only is set")
 
     index = load_index()
     slug = slugify(args.version)
