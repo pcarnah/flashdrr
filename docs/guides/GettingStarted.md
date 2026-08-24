@@ -56,28 +56,72 @@ camera matrices can be built with `get_vtk_view_mat`.
 such as `make_nd`, `normalize_hounsfield` and `normalize_voxel_scale`.
 
 ## A minimal end-to-end example
-The following renders a DRR from a random attenuation volume:
+The snippet below mirrors the end-to-end `__main__` block in
+`flashdrr/rendering/raycast.py`: it loads a CT volume with MONAI, derives the
+RAS↔IJK affine, builds a C-arm view matrix with `get_vtk_view_mat`, and
+renders a DRR with `VolumeRaycaster`. Two attenuation pipelines are shown
+from the same loaded volume — a hand-made 5-keypoint transfer function
+mapping HU → attenuation coefficients via `piecewise_linear_channelwise`,
+and a simple linear HU → μ map.
 
 ```python
 import torch
+from monai.transforms import Compose, LoadImage, EnsureChannelFirst, Spacing, ScaleIntensityRange, EnsureType
+
 import flashdrr.rendering as R
-from flashdrr.rendering import carm_to_camera_params, get_vtk_view_mat
 
-# (B, C, D, H, W) attenuation volume; ras2ijk: (4, 4) RAS -> IJK affine
-vol   = torch.rand(1, 1, 128, 128, 128)
-ras2ijk = torch.eye(4)
+# ---------- 1. Load CT volume and build the RAS<->IJK affine ----------
+load_tf = Compose([
+    LoadImage(),
+    EnsureChannelFirst(),
+    Spacing([2.5, 2.5, 3.0]),
+    ScaleIntensityRange(-3024, 3024, 0, 1, clip=True),
+    EnsureType(),
+])
+vol = load_tf('CTChest.nii.gz').unsqueeze(0)                    # (1, 1, D, H, W), MetaTensor in HU
+ijk2ras = vol.meta['affine']                                    # (4, 4) IJK -> RAS
+ras2ijk = torch.linalg.inv(ijk2ras)
+vol = vol.cuda()
 
-raycaster = R.VolumeRaycaster(ray_samples=256, resolution=(512, 512))
+# ---------- 2. Build a C-arm view matrix in RAS ----------
+center_ijk = torch.ones(4, dtype=torch.float64)
+center_ijk[:3] = torch.as_tensor(vol.shape[2:]) // 2
+center_ras = (ijk2ras @ center_ijk)[:3].float().cuda()
+view_mat = R.get_vtk_view_mat(
+    cam_pos=(0.0, 1000.0, -130.0),                              # source 1 m in front of the volume
+    cam_focal=tuple(center_ras.tolist()),
+    cam_viewup=(0.0, 0.0, 1.0),
+    device='cuda',
+).unsqueeze(0)                                                 # (1, 4, 4)
 
-center   = torch.tensor([64., 64., 64.])
-pos, focal, up = carm_to_camera_params(
-    sid=1000.0, ap_angle=0.0, lat_angle=-30.0,
-    center_ras=center, table_si=0.0)
-view_mat = get_vtk_view_mat(pos, focal, up).unsqueeze(0)
+raycaster = R.VolumeRaycaster(ray_samples=384, resolution=(1024, 1024)).cuda().eval()
 
-drr = raycaster(vol, view_mat=view_mat, ras2ijk=ras2ijk)
-# drr: (1, 1, 512, 512) projection
+# ---------- 3a. Hand-made HU -> attenuation transfer function ----------
+# Each keypoint is (HU, attenuation); below -200 HU is air (mu=0),
+# soft tissue ramps gently, bone saturates to high attenuation.
+tf = torch.tensor([
+    [-3500, 0.00],   # air
+    [ -200, 0.00],   # lung / soft-tissue boundary
+    [  200, 0.05],   # soft tissue
+    [ 1535, 0.50],   # cortical bone
+    [ 3071, 0.65],   # dense bone / metal
+]).cuda()
+tf[:, 0] = (tf[:, 0] + 3500) / 7000                            # normalize HU to [0, 1]
+xp = tf[:, 0].unsqueeze(0)                                     # (1, K)
+yp = tf[:, -1].unsqueeze(0)                                    # (1, K)
+mu_tf = R.piecewise_linear_channelwise(vol, xp, yp)            # (1, 1, D, H, W)
+
+drr_tf = raycaster(mu_tf, view_mat=view_mat, ras2ijk=ras2ijk.float().cuda())
+
+# ---------- 3b. Linear HU -> mu map ----------
+hu = vol * (3024 - (-3524)) + (-3524)
+mu_lin = torch.clamp(0.05 * (1.0 + hu / 800.0), min=0.0)       # (1, 1, D, H, W)
+
+drr_lin = raycaster(mu_lin, view_mat=view_mat, ras2ijk=ras2ijk.float().cuda())
 ```
+
+Pass `triton=True` to `raycaster(...)` to switch to the fused
+CUDA/Triton kernel.
 
 ## Contributing
 The project is small and focused. We are open for all suggestions right on our

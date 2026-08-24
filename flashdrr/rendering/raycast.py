@@ -852,11 +852,11 @@ if __name__ == '__main__':
     # vol.requires_grad_(True)
 
     tf = [torch.tensor([
-        [-3500, 1, 1, 1, 0.0],
-        [-200, 1, 1, 1, 0.0],
-        [200, 1, 1, 1, 0.05],
-        [1535, 1, 1, 1, 0.5],
-        [3071, 1, 1, 1, 0.65],
+        [-3500, 0.0],
+        [-200, 0.0],
+        [200, 0.05],
+        [1535, 0.5],
+        [3071, 0.65],
     ]).cuda()]
     tf[0][:, 0] = (tf[0][:, 0] + 3500) / 7000
 
@@ -893,6 +893,16 @@ if __name__ == '__main__':
     # print(view_mat.inverse())
 
     view_mat = view_mat.repeat(1, 1, 1)
+
+    start = timer()
+    out = ren(a.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk)
+    torch.cuda.synchronize()
+    end = timer()
+    print(out.shape, end - start)
+
+    plt.figure()
+    plt.imshow(out[0, 0].detach().cpu().numpy(), cmap='gray')
+    plt.show()
 
     start = timer()
     out = ren(mu.expand(1, 8, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk)
