@@ -56,6 +56,13 @@ autodoc_default_options = {
 autodoc_class_signature = 'separated'
 autodoc_typehints = 'description'
 
+# Autodoc will try to import every public object it documents. The full
+# flashdrr.rendering stack needs torch, numpy, and triton at import time, but
+# for *rendering the docs* we only need the API surface (signatures, classes,
+# docstrings). Mocking these heavy / platform-specific deps lets the docs job
+# run on a vanilla CPython without pulling the CUDA stack.
+autodoc_mock_imports = ['torch', 'numpy', 'triton', 'triton.language']
+
 # -- Options for HTML output -------------------------------------------------
 
 html_theme = 'sphinx_rtd_theme'

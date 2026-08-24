@@ -30,11 +30,22 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: pip-docs-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'docs/_build_versions.py') }}
+          restore-keys: |
+            pip-docs-${{ runner.os }}-
+
       - name: Install package with docs extras
         run: |
           python -m pip install --upgrade pip
-          # CPU-only torch is enough for autodoc; CUDA is not needed for docs.
-          python -m pip install -e ".[docs,cpu]"
+          # Heavy runtime deps (torch, torchvision, monai, triton) are mocked
+          # in docs/conf.py via autodoc_mock_imports, so we install flashdrr
+          # with --no-deps to skip them entirely. This keeps the docs job off
+          # the CUDA wheels and ~1 GB lighter.
+          python -m pip install --no-deps -e ".[docs]"
 
       - name: Decide version + alias
         id: meta
