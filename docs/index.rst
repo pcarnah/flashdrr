@@ -18,7 +18,7 @@ the camera parameters.
    :maxdepth: 1
    :caption: More Information:
 
-   GitHub <https://github.com/torchvtk/torchvtk>
+   GitHub <https://github.com/pcarnah/flashdrr>
    guides/Contributing.md
    guides/Troubleshooting.md
 

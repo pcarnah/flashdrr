@@ -1,6 +1,6 @@
-## Troubleshooting
+# Troubleshooting
 
-### Known Issues
+## Known Issues
 
 * The Triton-fused `FusedVolumeRenderer` requires CUDA and a working Triton
   installation. On Windows the `triton-windows` fork is used automatically —
@@ -10,6 +10,6 @@
   accumulation dtype manually. If you rely on mixed precision, do your
   up/down-casting around the render call.
 
-### Frequently Asked Questions
+## Frequently Asked Questions
 
-Go ask us some questions on [GitHub](https://github.com/torchvtk/torchvtk)!
+Go ask us some questions on [GitHub](https://github.com/pcarnah/flashdrr)!

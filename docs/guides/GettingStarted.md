@@ -1,8 +1,8 @@
-## Getting Started
+# Getting Started
 
 This document should get you up and running with `FlashDRR`!
 
-### What is FlashDRR?
+## What is FlashDRR?
 `FlashDRR` is a small, focused library for **differentiable DRR
 (Digitally Reconstructed Radiograph) raycasting** and volume rendering in
 PyTorch. It turns CT volumes into synthetic X-ray projections while keeping
@@ -14,25 +14,25 @@ The pre-0.4.x "data loading framework" functionality (TorchDataset /
 TorchQueueDataset, HDF5 & DICOM converters, transforms) has been trimmed.
 The current focus is the renderer and its camera geometry.
 
-### Installation
-#### Latest PyPI release
+## Installation
+### Latest PyPI release
 ```
 pip install flashdrr
 ```
-#### Latest master
+### Latest master
 ```
-pip install git+https://github.com/torchvtk/torchvtk.git@master#egg=flashdrr
+pip install git+https://github.com/pcarnah/flashdrr.git@master#egg=flashdrr
 ```
-#### Developer installation
+### Developer installation
 This will install your local changes to `flashdrr` directly.
 ```
-git clone https://github.com/torchvtk/torchvtk.git
-cd torchvtk
+git clone https://github.com/pcarnah/flashdrr.git
+cd flashdrr
 pip install -e .
 ```
 
-### Features
-#### Differentiable DRR raycasting
+## Features
+### Differentiable DRR raycasting
 The core of the library is `flashdrr.rendering.VolumeRaycaster`. It
 integrates attenuation along each ray (Beer–Lambert law by default) and is
 fully differentiable with respect to both the volume and the view matrix.
@@ -40,22 +40,22 @@ fully differentiable with respect to both the volume and the view matrix.
 Check out [Rendering](Rendering) for a detailed guide and end-to-end
 example.
 
-#### Fast Triton-fused rendering
+### Fast Triton-fused rendering
 `flashdrr.rendering.FusedVolumeRenderer` is a Triton-fused CUDA kernel that
 the `VolumeRaycaster` uses when `triton=True`. For high-resolution or many
 view renders it provides an order-of-magnitude speedup over the pure-PyTorch
 loop.
 
-#### C-arm / camera geometry
+### C-arm / camera geometry
 Realistic X-ray gantry poses are easy to sample with
 `carm_to_camera_params` and `get_random_carm_views`, and VTK-compatible
 camera matrices can be built with `get_vtk_view_mat`.
 
-#### Volume utilities
+### Volume utilities
 `flashdrr.utils` provides small helpers for working with volumetric tensors,
 such as `make_nd`, `normalize_hounsfield` and `normalize_voxel_scale`.
 
-### A minimal end-to-end example
+## A minimal end-to-end example
 The following renders a DRR from a random attenuation volume:
 
 ```python
@@ -79,6 +79,6 @@ drr = raycaster(vol, view_mat=view_mat, ras2ijk=ras2ijk)
 # drr: (1, 1, 512, 512) projection
 ```
 
-### Contributing
+## Contributing
 The project is small and focused. We are open for all suggestions right on our
-[GitHub](https://github.com/torchvtk/torchvtk). Just throw us an issue ;)
+[GitHub](https://github.com/pcarnah/flashdrr). Just throw us an issue ;)

@@ -5,5 +5,7 @@ from flashdrr import __version__
 # -- Project information -----------------------------------------------------
 
 project = 'FlashDRR'
-copyright = '2024, Dominik Engel, Marc Fabian Mezger'
-author = 'Dominik Engel, Marc Fabian Mezger'
+copyright = '2026, Patrick Carnahan'
+author = 'Patrick Carnahan'
+
+extensions = ['myst_parser']

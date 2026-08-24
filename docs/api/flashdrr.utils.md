@@ -1,10 +1,10 @@
-## flashdrr.utils
+# flashdrr.utils
 
 Lightweight utilities for volumetric tensors. This module no longer contains
 transfer-function texturing helpers — transfer functions now live in
 :mod:`flashdrr.rendering` (see :func:`piecewise_linear_channelwise`).
 
-### make_nd
+## make_nd
 
 ```{eval-rst}
 .. autofunction:: flashdrr.utils.make_2d
@@ -14,13 +14,13 @@ transfer-function texturing helpers — transfer functions now live in
 .. autofunction:: flashdrr.utils.make_nd
 ```
 
-### normalize_hounsfield
+## normalize_hounsfield
 
 ```{eval-rst}
 .. autofunction:: flashdrr.utils.normalize_hounsfield
 ```
 
-### normalize_voxel_scale
+## normalize_voxel_scale
 
 ```{eval-rst}
 .. autofunction:: flashdrr.utils.normalize_voxel_scale

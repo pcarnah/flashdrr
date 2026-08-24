@@ -1,10 +1,10 @@
-## Rendering
+# Rendering
 
 This guide covers how to project a CT volume into a synthetic X-ray image
 (Digitally Reconstructed Radiograph, DRR) with `FlashDRR`, how the camera and
 coordinate conventions work, and how to choose between the two renderers.
 
-### Coordinate & camera conventions
+## Coordinate & camera conventions
 
 * Volumes are **RAS-aligned**, stored as `(B, C, D, H, W)` tensors.
 * The volume-to-world relationship is described by an affine `ras2ijk` matrix
@@ -24,14 +24,12 @@ for you:
   camera position, look-at point and view-up vector.
 * :func:`get_random_carm_views` — sample a batch of random C-arm views
   directly as view matrices.
-* :func:`get_proj_mat` — build a perspective projection matrix from FOV and
-  aspect ratio.
 
-### The renderers
+## The renderers
 
 `FlashDRR` ships two raycasters that share the same camera model:
 
-#### VolumeRaycaster
+### VolumeRaycaster
 
 :class:`VolumeRaycaster` is the main, fully differentiable raycaster. It
 integrates attenuation along each ray using the Beer–Lambert law by default,
@@ -49,7 +47,7 @@ The rendered image shape follows the forward-pass arguments: passing
 `vol (B, C, D, H, W)` and an `N`-row `view_mat (N, 4, 4)` returns an
 `(N, C, H, W)` projection.
 
-#### FusedVolumeRenderer
+### FusedVolumeRenderer
 
 :class:`FusedVolumeRenderer` is a Triton-fused CUDA kernel with a matching
 autograd wrapper. It requires CUDA and a working Triton installation (the
@@ -57,7 +55,7 @@ autograd wrapper. It requires CUDA and a working Triton installation (the
 many-view renders it provides a large speedup over the pure-PyTorch loop.
 :class:`VolumeRaycaster` uses it internally when `triton=True`.
 
-### End-to-end example
+## End-to-end example
 
 ```python
 import torch
@@ -81,7 +79,7 @@ view_mat = get_vtk_view_mat(pos, focal, up).unsqueeze(0)
 drr = raycaster(vol, view_mat=view_mat, ras2ijk=ras2ijk)
 ```
 
-### Transfer functions
+## Transfer functions
 
 CT voxels store Hounsfield units (HU). Before integrating attenuation you
 usually map these to density/attenuation values via a transfer function.
@@ -102,7 +100,7 @@ attenuation = piecewise_linear_channelwise(
 drr = raycaster(attenuation, view_mat=view_mat, ras2ijk=ras2ijk)
 ```
 
-### Rendering many views
+## Rendering many views
 
 Pass `N` rows in `view_mat` to render several projections at once. `N` must
 either equal the batch size `B` or be a multiple of it:

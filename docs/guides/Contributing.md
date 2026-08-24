@@ -1,4 +1,4 @@
-## Contributing
+# Contributing
 
 This project is still very small, however we are gladly accepting contributions
 of all kinds. However it might be in both your and our interest, if you start by

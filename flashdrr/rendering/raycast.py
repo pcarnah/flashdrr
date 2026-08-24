@@ -1,5 +1,21 @@
 # Initially adapted from torchvtk (https://github.com/torchvtk/torchvtk/). Rendering engine completely re-written since.
 
+"""
+Differentiable volume rendering for 2D X-ray projection (DRR) synthesis.
+
+This module provides:
+
+* Camera utilities for sampling and building C-arm view matrices in RAS
+  space (:func:`get_random_carm_views`, :func:`carm_to_camera_params`,
+  :func:`get_vtk_view_mat`).
+* A per-channel piecewise-linear transfer function
+  (:func:`piecewise_linear_channelwise`).
+* Building blocks :class:`ASPP` and :class:`DepthAwareScatter` (prototype).
+* :class:`VolumeRaycaster`, the main differentiable raycaster that ties
+  these together. It dispatches between a tiled Python-loop backend and a
+  fused CUDA/Triton backend (:class:`flashdrr.rendering.FusedVolumeRenderer`).
+"""
+
 import math
 from timeit import default_timer as timer
 from typing import Tuple, Optional
@@ -18,10 +34,20 @@ __all__ = ['get_vtk_view_mat', 'get_random_carm_views', 'carm_to_camera_params',
 
 def get_random_carm_views(n_views, sid_range, ap_range, lat_range, si_range, center):
     """
-    Randomly sample C-arm view parameters.
+    Randomly sample C-arm view matrices by uniform sampling of the underlying
+    geometric parameters.
+
+    For each of ``n_views`` samples, source-to-image distance (SID), AP angle,
+    lateral angle, and table SI translation are drawn uniformly from the
+    corresponding ranges, converted to a camera (position, focal, up) tuple
+    via :func:`carm_to_camera_params`, and assembled into a 4x4 camera-to-
+    world view matrix via :func:`get_vtk_view_mat`. The matrices are stacked
+    along a new leading dimension.
 
     Parameters:
     -----------
+    n_views : int
+        Number of view matrices to sample.
     sid_range : tuple of 2 floats
         (min_sid, max_sid) in mm. Typical range: (900, 1200)
     ap_range : tuple of 2 floats
@@ -30,17 +56,14 @@ def get_random_carm_views(n_views, sid_range, ap_range, lat_range, si_range, cen
         (min_lat, max_lat) in degrees. Typical range: (-90, 90) for LAO/RAO
     si_range : tuple of 2 floats
         (min_si, max_si) in mm. Typical range: (-100, 100) for table translation
+    center : tuple or list of 3 floats
+        Volume center in RAS coordinates (mm), passed to
+        :func:`carm_to_camera_params`.
 
     Returns:
     --------
-    sid : float
-        Source-to-image distance in mm
-    ap_angle : float
-        AP angle in degrees
-    lat_angle : float
-        Lateral angle in degrees
-    table_si : float
-        Table superior-inferior translation in mm
+    views : torch.Tensor (n_views, 4, 4)
+        Stacked camera-to-world view matrices in RAS space, on CPU.
 
     Notes:
     ------
@@ -85,8 +108,8 @@ def carm_to_camera_params(sid, ap_angle, lat_angle, center_ras, table_si=0.0):
     ap_angle : float
         Anteroposterior (AP) angle in degrees
         - 0° = AP view (source in front, looking posterior)
-        - Positive = cranial angulation
-        - Negative = caudal angulation
+        - Positive = caudal angulation (source tilts inferiorly)
+        - Negative = cranial angulation (source tilts superiorly)
     lat_angle : float
         Lateral angle in degrees
         - 0° = AP view
@@ -156,6 +179,25 @@ def get_vtk_view_mat(cam_pos: Tuple[float],  # (3,) camera center in RAS
                      cam_focal: Tuple[float],  # (3,) camera focal point in RAS
                      cam_viewup: Tuple[float],  # (3,) view-up vector in RAS)
                      device: str = 'cpu'):
+    """
+    Build a VTK-compatible camera-to-world view matrix (4x4) from camera position,
+    focal point, and view-up direction in RAS coordinates.
+
+    The resulting matrix maps camera-space points to world (RAS) space. The
+    top-left 3x3 block has the camera axes as its columns, ordered
+    ``[right, up, forward]``; the fourth column is the camera position
+    ``cam_pos``; the bottom row is ``[0, 0, 0, 1]``. ``forward`` points
+    from ``cam_pos`` toward ``cam_focal``.
+
+    Args:
+        cam_pos: Camera/source position in RAS (mm), shape (3,).
+        cam_focal: Camera focal (look-at) point in RAS (mm), shape (3,).
+        cam_viewup: World-space up direction in RAS, shape (3,). Need not be unit length.
+        device: Device on which to allocate the returned tensor. Defaults to ``'cpu'``.
+
+    Returns:
+        torch.Tensor: (4, 4) camera-to-world view matrix as described above.
+    """
     cam_pos = torch.as_tensor(cam_pos, dtype=torch.float32)
     cam_focal = torch.as_tensor(cam_focal, dtype=torch.float32)
     cam_viewup = torch.as_tensor(cam_viewup, dtype=torch.float32)
@@ -228,6 +270,19 @@ def piecewise_linear_channelwise(x, xp, yp):
 
 
 class ASPP(nn.Module):
+    """Atrous Spatial Pyramid Pooling (ASPP) module.
+
+    Applies parallel 2D atrous (dilated) convolutions with multiple dilation
+    rates, concatenates their ReLU-activated outputs, and projects the
+    concatenated feature map back to ``out_ch`` channels with a 1x1 conv.
+
+    Args:
+        in_ch: Number of input channels.
+        out_ch: Number of output channels for each branch and the final projection.
+        rates: Tuple of dilation rates for the parallel ``Conv2d`` branches.
+            Each branch uses a 3x3 kernel with padding equal to its dilation.
+    """
+
     def __init__(self, in_ch, out_ch, rates=(1, 2, 4, 8)):
         super().__init__()
         self.branches = nn.ModuleList([
@@ -243,11 +298,40 @@ class ASPP(nn.Module):
         nn.init.zeros_(self.proj.bias)
 
     def forward(self, x):
+        """
+        Run the ASPP branches and project to ``out_ch`` channels.
+
+        Args:
+            x: Input feature map of shape ``(B, in_ch, H, W)``.
+
+        Returns:
+            torch.Tensor: Output feature map of shape ``(B, out_ch, H, W)``.
+        """
         feats = [F.relu(branch(x)) for branch in self.branches]
         return self.proj(torch.cat(feats, dim=1))
 
 
 class DepthAwareScatter(nn.Module):
+    """Prototype depth-aware scatter estimator for DRR rendering.
+
+    .. warning::
+        **Prototype, not fully functional.** This module is an experimental
+        design and is not yet validated end-to-end. The scattering model,
+        gating, and integration with the main raycaster are subject to
+        change. Do not rely on its outputs for production use.
+
+    Given per-sample attenuation ``mu`` along each ray, it computes a
+    Beer-Lambert primary transmission, accumulates a depth-dependent scatter
+    source, mixes it with an ASPP-conditioned gate, and adds a bounded
+    scatter contribution to the primary image.
+
+    Args:
+        in_ch: Number of scatter channels (``C``) in the input volume.
+        base_ch: Hidden channel width of the conditioning/ASPP branch.
+        alpha_max: Upper bound on the learned scatter gating weight applied
+            to the scatter map before it is added to the primary image.
+    """
+
     def __init__(self, in_ch, base_ch=32, alpha_max=0.4):
         super().__init__()
         self.alpha_max = alpha_max
@@ -270,6 +354,27 @@ class DepthAwareScatter(nn.Module):
         nn.init.zeros_(self.scatter_conv.bias)
 
     def forward(self, mu, dz=1.0):
+        """
+        Estimate primary and scatter contributions along rays.
+
+        Args:
+            mu: Per-sample attenuation, shape ``(B, C, D, H, W)`` where ``D`` is
+                the number of samples along each ray.
+            dz: Scalar sample spacing along the ray (same units as volume
+                voxel sizes, e.g. mm). Defaults to ``1.0``.
+
+        Returns:
+            Tuple of:
+
+            * **I_out** (``(B, C, H, W)``): Primary transmission plus the
+              bounded, gated scatter map.
+            * **I_primary** (``(B, C, H, W)``): Beer-Lambert primary
+              transmission at the exit of the ray (pre-scatter).
+            * **scatter_map** (``(B, 1, H, W)``): Learned per-pixel scatter
+              contribution before the alpha gate.
+            * **alpha** (``(B, 1, H, W)``): Per-pixel gating weight in
+              ``[0, alpha_max]`` applied to ``scatter_map``.
+        """
         # mu: [B,C,D,H,W], I0 = 1
         B, C, D, H, W = mu.shape
 
@@ -311,6 +416,27 @@ class DepthAwareScatter(nn.Module):
 
 # %%
 class VolumeRaycaster(nn.Module):
+    """
+    Differentiable C-arm volume raycaster for digitally reconstructed
+    radiographs (DRRs).
+
+    Given a 3D attenuation volume in IJK space and one or more camera view
+    matrices in RAS space, ``VolumeRaycaster`` samples along each camera
+    ray, integrates the attenuation using either Beer-Lambert or alpha
+    compositing, and produces a 2D projection per view. Rendering is
+    differentiable with respect to the input volume and view matrices.
+
+    Two backends are supported:
+
+    * A tiled Python-loop renderer using ``torch.grid_sample`` (default).
+    * A fused CUDA/Triton renderer (``flashdrr.rendering.FusedVolumeRenderer``),
+      selected per-call via ``forward(..., triton=True)``.
+
+    A lightweight, prototype depth-aware scatter model
+    (:class:`DepthAwareScatter`) can be attached for the last
+    ``scatter`` channels of the volume.
+    """
+
     def __init__(
             self,
             density_factor: float = 100.0,
@@ -322,13 +448,33 @@ class VolumeRaycaster(nn.Module):
             i0: Optional[float] = None,
             fov: Optional[float] = 20.0
     ) -> None:
-        ''' Initializes differentiable raycasting layer
+        """
+        Initialize the raycaster.
 
         Args:
-            density_factor (float): scales the overall density
-            ray_samples (int): Number of samples along the rays
-            resolution (int, (int, int)): Tuple describing width and height of the render. A single int produces a square image
-            '''
+            density_factor: Scalar multiplier applied to volume intensities
+                before integration. Used by the alpha-compositing branch of
+                the Python-loop backend and passed to the Triton backend.
+            ray_samples: Number of samples taken along each camera ray.
+            resolution: Output image size as ``(width, height)`` or a single
+                int for a square image.
+            use_checkpointing: If True, use ``torch.utils.checkpoint`` to
+                trade compute for memory in the Python-loop backend (training
+                only).
+            use_beer_lambert: If True, integrate via the Beer-Lambert law
+                and return ``1 - exp(-int(mu * dz))``. If False, use
+                front-to-back alpha compositing (over operator).
+            scatter: If not ``None``, treat the last ``scatter`` channels of
+                the volume as scatter channels and process them with
+                :class:`DepthAwareScatter` (prototype; not fully functional);
+                the remaining channels are rendered with Beer-Lambert as
+                primary. Only has an effect when ``use_beer_lambert`` is
+                True.
+            i0: Mean photon count at the source for the Gaussian-Poisson
+                surrogate noise model. If ``None``, no noise is added.
+            fov: Vertical field of view in degrees used to build the per-pixel
+                ray directions.
+        """
         super().__init__()
         self.density_factor = density_factor
         self.ray_samples = ray_samples
@@ -355,6 +501,16 @@ class VolumeRaycaster(nn.Module):
         self.set_fov(fov)
 
     def set_fov(self, fov: float) -> None:
+        """
+        Configure the camera's vertical field of view and refresh the
+        per-pixel ray direction buffer ``self.dirs_cam``.
+
+        The buffer is built on CPU in the image plane, normalized, then
+        moved to the module's current device.
+
+        Args:
+            fov: Vertical field of view in degrees.
+        """
         # Get the current device from the buffer
         device = self.dirs_cam.device
 
@@ -394,8 +550,8 @@ class VolumeRaycaster(nn.Module):
         ijk2ras : torch.Tensor (4, 4)
             Transformation matrix from IJK to RAS coordinates
         margin : float, optional
-            Safety margin to add to near/far distances in mm (default: 0.0)
-            Positive values expand the clipping range
+            Safety margin to add to near/far distances in mm (default: 30.0).
+            Positive values expand the clipping range.
 
         Returns:
         --------
@@ -479,6 +635,25 @@ class VolumeRaycaster(nn.Module):
         return near, far
 
     def apply_poisson(self, transmission: torch.Tensor) -> torch.Tensor:
+        """
+        Add a differentiable Gaussian approximation of Poisson noise to a
+        transmission map.
+
+        If ``self.i0`` is ``None``, the input is returned unchanged (no
+        noise is added). Otherwise, Gaussian noise with standard deviation
+        ``sqrt(transmission / i0)`` is added and the result is clamped to
+        ``[0, 1]``. This is a smooth surrogate for shot/Poisson noise and is
+        fully differentiable.
+
+        Args:
+            transmission: Transmission values (post-primary, pre-noise) in
+                ``[0, 1]``. Any shape is supported.
+
+        Returns:
+            torch.Tensor: Noisy transmission, same shape as ``transmission``,
+            clamped to ``[0, 1]``. Returns the input unchanged when ``i0`` is
+            ``None``.
+        """
         if self.i0 is None:
             return transmission
 
@@ -492,12 +667,29 @@ class VolumeRaycaster(nn.Module):
     def forward(self, vol: torch.Tensor, view_mat: torch.Tensor, ras2ijk: torch.Tensor,
                 tile_h: int = 256, tile_w: int = 256, triton: bool = False) -> torch.Tensor:
         """
+        Render one or more views of a (batched) 3D attenuation volume.
+
         Args:
-            vol:      (B, C, D, H, W)
-            view_mat: (B, 4, 4) or (N, 4, 4) where N = B * views_per_vol
-            ras2ijk:  (4, 4)
+            vol: Attenuation volume of shape ``(B, C, D, H, W)`` in IJK
+                voxel space. The affine ``ras2ijk`` is what makes the volume
+                RAS-aligned at runtime.
+            view_mat: Camera-to-world view matrices in RAS, shape
+                ``(B, 4, 4)`` or ``(N, 4, 4)`` where ``N = B * views_per_vol``.
+                As a special case, ``N == 1`` is broadcast to ``B``. The
+                clipping-distance computation also accepts world-to-camera
+                matrices and auto-inverts them.
+            ras2ijk: 4x4 affine mapping RAS to IJK coordinates.
+            tile_h: Tile height used by the Python-loop backend to bound
+                peak memory. Ignored if the image is smaller than
+                ``(2*tile_h, 2*tile_w)``.
+            tile_w: Tile width used by the Python-loop backend. See
+                ``tile_h``.
+            triton: If True, use the fused CUDA/Triton renderer
+                (:class:`flashdrr.rendering.FusedVolumeRenderer`); otherwise
+                use the tiled Python-loop renderer.
+
         Returns:
-            (N, C, H, W)
+            torch.Tensor: Rendered projections of shape ``(N, C, H, W)``.
         """
         with torch.autocast(device_type='cuda', enabled=False):
 
