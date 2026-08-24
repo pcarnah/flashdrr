@@ -6,7 +6,6 @@ on:
     # Tags may be ``v1.2.3`` or bare ``1.2.3`` — both forms build a stable
     # docs snapshot. ``refs/tags/*`` matches everything; we just don't want
     # to filter further here because tag naming isn't enforced.
-    tags: ['*']
   pull_request:
     branches: [main]
   release:
@@ -28,6 +27,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - name: Ensure main branch ref is available
+        run: |
+            git branch -f main origin/main || true
 
       - uses: actions/setup-python@v5
         with:
