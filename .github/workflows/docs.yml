@@ -68,29 +68,39 @@ jobs:
       - name: Stage landing page
         run: |
           # sphinx-multiversion produces one subdirectory per ref under
-          # docs/_build/html/ (e.g. tags/0.5.1/, heads/main/). Drop a tiny
-          # landing page at the site root that auto-redirects to the
-          # development build so the GitHub Pages URL still resolves to
-          # *something* even before any version is "active".
+          # docs/_build/html/ with smv_outputdir_format = '{ref.name}' and
+          # smv_remote_whitelist = None, so the dev build lands at
+          # ``main/`` and released tags land at ``<version>/`` (e.g.
+          # ``0.5.1/``). Drop a tiny landing page at the site root that
+          # auto-redirects to the development build so the GitHub Pages
+          # URL still resolves to *something* even before any version is
+          # "active".
           cat > docs/_build/html/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
           <head>
           <meta charset="utf-8">
           <title>FlashDRR documentation</title>
-          <meta http-equiv="refresh" content="0; url=heads/main/">
-          <link rel="canonical" href="heads/main/">
+          <meta http-equiv="refresh" content="0; url=main/">
+          <link rel="canonical" href="main/">
           </head>
           <body>
-          <p><a href="heads/main/">main (development)</a></p>
+          <p><a href="main/">main (development)</a></p>
           </body>
           </html>
           HTML
 
       - name: Verify build
         run: |
-          test -d docs/_build/html/heads/main || test -d docs/_build/html/remotes/origin/main
-          test -d docs/_build/html/tags/stable || echo "::notice::no stable build yet (no tag exists)"
+          # The dev build is always present (smv_branch_whitelist
+          # matches ``main``). Released tags are only present once a
+          # matching tag is pushed — make the latter a soft check that
+          # emits a notice instead of failing the step.
+          test -d docs/_build/html/main
+          if [ ! -d docs/_build/html/0.5.1 ] && \
+             ! ls docs/_build/html/ 2>/dev/null | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::notice::no released tag build yet (no matching tag exists)"
+          fi
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

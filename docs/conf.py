@@ -94,8 +94,10 @@ templates_path = ['_templates']
 # both map to the same outputdir. Restricting ``smv_remote_whitelist`` to
 # ``None`` (use local branches only) avoids the duplicate: CI's
 # ``actions/checkout`` always creates a local branch for the current ref,
-# so ``heads/main`` is the canonical development build, and release tags
-# are still discovered via ``refs/tags/*`` regardless of remote settings.
+# so ``main`` is the canonical development build, and release tags are
+# still discovered via ``refs/tags/*`` regardless of remote settings.
+# With ``smv_outputdir_format = '{ref.name}'`` the dev build lands at
+# ``main/`` and released tags at ``<version>/`` (e.g. ``0.5.1/``).
 smv_tag_whitelist = r'^v?\d+\.\d+\.\d+$'
 smv_branch_whitelist = r'^(main|master)$'
 smv_remote_whitelist = None
