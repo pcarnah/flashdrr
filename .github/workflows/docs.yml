@@ -1,0 +1,98 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pages-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Sphinx docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install package with docs extras
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch is enough for autodoc; CUDA is not needed for docs.
+          python -m pip install -e ".[docs,cpu]"
+
+      - name: Decide version + alias
+        id: meta
+        run: |
+          if [[ "${{ github.event_name }}" == "release" ]]; then
+            VER="${{ github.event.release.tag_name }}"
+            VER="${VER#v}"
+            echo "version=${VER}" >> "$GITHUB_OUTPUT"
+            echo "alias=stable"   >> "$GITHUB_OUTPUT"
+            echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
+          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
+            VER="${GITHUB_REF_NAME#v}"
+            echo "version=${VER}" >> "$GITHUB_OUTPUT"
+            echo "alias=stable"   >> "$GITHUB_OUTPUT"
+            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          else
+            # main / PR: use the current package version (dev build).
+            VER=$(python -c "from flashdrr import __version__; print(__version__)")
+            echo "version=${VER}" >> "$GITHUB_OUTPUT"
+            echo "alias=latest"   >> "$GITHUB_OUTPUT"
+            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          fi
+          echo "Building ${{ steps.meta.outputs.alias }} = ${{ steps.meta.outputs.version }}"
+
+      - name: Build versioned site
+        run: |
+          python docs/_build_versions.py \
+            --alias  "${{ steps.meta.outputs.alias }}" \
+            --version "${{ steps.meta.outputs.version }}" \
+            --ref     "${{ steps.meta.outputs.ref }}"
+
+      - name: Prune stale versioned docs
+        if: github.ref == 'refs/heads/main'
+        run: |
+          python docs/_build_versions.py --prune-only
+
+      - name: Verify build
+        run: |
+          test -f docs/_build/site/versions.json
+          test -d docs/_build/site/latest
+          test -d docs/_build/site/stable || echo "::notice::no stable build yet (no v* tag exists)"
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/_build/site
+
+  deploy:
+    name: Deploy to GitHub Pages
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

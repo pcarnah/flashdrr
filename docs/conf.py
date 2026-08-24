@@ -7,7 +7,9 @@ from flashdrr import __version__
 project = 'FlashDRR'
 copyright = '2026, Patrick Carnahan'
 author = 'Patrick Carnahan'
-release = __version__
+# Allow CI to override the banner version (e.g. when building an immutable
+# tag snapshot where flashdrr.__version__ already advanced on main).
+release = os.environ.get('FLASHDRR_DOCS_VERSION') or __version__
 
 # -- General configuration --------------------------------------------------
 
@@ -20,13 +22,11 @@ extensions = [
     'sphinx_rtd_theme',
 ]
 
-templates_path = ['_templates']
-exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
-
 source_suffix = {
     '.rst': 'restructuredtext',
     '.md': 'markdown',
 }
+exclude_patterns = ['_build', '_build_versions.py', 'Thumbs.db', '.DS_Store']
 
 master_doc = 'index'
 language = 'en'
@@ -60,3 +60,8 @@ autodoc_typehints = 'description'
 
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
+html_baseurl = 'https://pcarnah.github.io/flashdrr/'
+# Inject the version-switcher dropdown on every page. The script fetches
+# versions.json (written by docs/_build_versions.py) and prepends a banner
+# to the page with a dropdown of stable/latest/<tag> builds.
+html_js_files = ['version-switcher.js']
