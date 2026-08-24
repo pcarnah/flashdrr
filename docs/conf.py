@@ -7,8 +7,9 @@ from flashdrr import __version__
 project = 'FlashDRR'
 copyright = '2026, Patrick Carnahan'
 author = 'Patrick Carnahan'
-# Allow CI to override the banner version (e.g. when building an immutable
-# tag snapshot where flashdrr.__version__ already advanced on main).
+# sphinx-multiversion stamps each build with the current ref's name (e.g.
+# ``v0.5.1`` for a tag, ``main`` for a branch). On a plain ``sphinx-build``
+# invocation there is no ref, so fall back to the package version.
 release = os.environ.get('FLASHDRR_DOCS_VERSION') or __version__
 
 # -- General configuration --------------------------------------------------
@@ -20,13 +21,14 @@ extensions = [
     'sphinx.ext.napoleon',
     'sphinx.ext.viewcode',
     'sphinx_rtd_theme',
+    'sphinx_multiversion',
 ]
 
 source_suffix = {
     '.rst': 'restructuredtext',
     '.md': 'markdown',
 }
-exclude_patterns = ['_build', '_build_versions.py', 'Thumbs.db', '.DS_Store']
+exclude_patterns = ['_build', 'Thumbs.db', '.DS_Store']
 
 master_doc = 'index'
 language = 'en'
@@ -68,24 +70,30 @@ autodoc_mock_imports = ['torch', 'numpy', 'triton', 'triton.language']
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 html_baseurl = 'https://pcarnah.github.io/flashdrr/'
-# Inject the version-switcher dropdown on every page. The script queries the
-# GitHub Releases API at runtime and prepends a banner with a dropdown of
-# stable/latest/<tag> builds. No per-build data file is needed: the release
-# list is the single source of truth.
-html_js_files = ['version-switcher.js']
+
+# Custom templates live here; sphinx-multiversion injects the per-build
+# ``versions`` and ``current_version`` Jinja context we use in
+# ``versioning.html`` to render the version selector flyout.
 templates_path = ['_templates']
-# Inline <script> emitted by _templates/layout.html. Stamped at config load
-# time so sphinx can cache the config (callables are not picklable). Holds
-# this build's own version and whether it represents the moving main build.
-import json as _json
-_FLASHDRR_DOCS_PAYLOAD = _json.dumps(
-    {
-        'version': release,
-        'is_latest': bool(os.environ.get('FLASHDRR_DOCS_IS_LATEST')),
-    },
-    separators=(',', ':'),
-)
-html_context = {
-    'flashdrr_docs_context_js':
-        '<script>window.FLASHDRR_DOCS=' + _FLASHDRR_DOCS_PAYLOAD + ';</script>',
+html_sidebars = {
+    '**': [
+        'relations.html',
+        'searchbox.html',
+        'versioning.html',
+    ],
 }
+
+# -- sphinx-multiversion -----------------------------------------------------
+# Build documentation for every git tag matching the version pattern below
+# plus the main branch. Each version lands in its own subdirectory under
+# ``_build/html/<refname>/`` and the ``versioning.html`` sidebar template
+# produces a flyout menu linking them together.
+smv_tag_whitelist = r'^v?\d+\.\d+\.\d+$'
+smv_branch_whitelist = r'^(main|master)$'
+smv_remote_whitelist = r'^origin$'
+smv_released_pattern = r'^tags/v?\d+\.\d+\.\d+$'
+smv_outputdir_format = '{ref.name}'
+# When invoked through ``sphinx-multiversion`` we have a real ref; for a
+# plain ``sphinx-build`` invocation (e.g. local previews, RTD's single-version
+# build) there isn't one, so we don't fail the build for a missing refname.
+smv_vcs_url = 'https://github.com/pcarnah/flashdrr'

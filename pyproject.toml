@@ -106,6 +106,7 @@ docs = [
     "sphinx",
     "myst-parser",
     "sphinx-rtd-theme",
+    "sphinx-multiversion",
 ]
 vis = [
     "matplotlib",

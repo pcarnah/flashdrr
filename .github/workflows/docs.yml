@@ -37,7 +37,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.cache/pip
-          key: pip-docs-${{ runner.os }}-${{ hashFiles('pyproject.toml', 'docs/_build_versions.py') }}
+          key: pip-docs-${{ runner.os }}-${{ hashFiles('pyproject.toml') }}
           restore-keys: |
             pip-docs-${{ runner.os }}-
 
@@ -48,55 +48,46 @@ jobs:
           # in docs/conf.py via autodoc_mock_imports, so we install flashdrr
           # with --no-deps to skip them entirely. This keeps the docs job off
           # the CUDA wheels and ~1 GB lighter. The [docs] extra's own deps
-          # (sphinx, myst-parser, sphinx-rtd-theme) have to be installed
-          # explicitly since --no-deps also skips them.
-          python -m pip install sphinx myst-parser sphinx-rtd-theme
+          # (sphinx, myst-parser, sphinx-rtd-theme, sphinx-multiversion) have
+          # to be installed explicitly since --no-deps also skips them.
+          python -m pip install sphinx myst-parser sphinx-rtd-theme sphinx-multiversion
           python -m pip install --no-deps -e "."
-
-      - name: Decide version + alias
-        id: meta
-        run: |
-          if [[ "${{ github.event_name }}" == "release" ]]; then
-            VER="${{ github.event.release.tag_name }}"
-            VER="${VER#v}"
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
-            echo "alias=stable"   >> "$GITHUB_OUTPUT"
-            echo "ref=${{ github.sha }}" >> "$GITHUB_OUTPUT"
-          elif [[ "${{ github.ref_type }}" == "tag" ]]; then
-            VER="${GITHUB_REF_NAME#v}"
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
-            echo "alias=stable"   >> "$GITHUB_OUTPUT"
-            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          else
-            # main / PR: use the current package version (dev build).
-            VER=$(python -c "from flashdrr import __version__; print(__version__)")
-            echo "version=${VER}" >> "$GITHUB_OUTPUT"
-            echo "alias=latest"   >> "$GITHUB_OUTPUT"
-            echo "ref=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Building ${{ steps.meta.outputs.alias }} = ${{ steps.meta.outputs.version }}"
 
       - name: Build versioned site
         run: |
-          python docs/_build_versions.py \
-            --alias  "${{ steps.meta.outputs.alias }}" \
-            --version "${{ steps.meta.outputs.version }}" \
-            --ref     "${{ steps.meta.outputs.ref }}"
+          sphinx-multiversion docs docs/_build/html \
+            -b html -q
 
-      - name: Prune stale versioned docs
-        if: github.ref == 'refs/heads/main'
+      - name: Stage landing page
         run: |
-          python docs/_build_versions.py --prune-only
+          # sphinx-multiversion produces one subdirectory per ref under
+          # docs/_build/html/. Drop a tiny landing page at the site root
+          # that auto-redirects to ``main`` so the GitHub Pages URL still
+          # resolves to *something* even before any version is "active".
+          cat > docs/_build/html/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+          <meta charset="utf-8">
+          <title>FlashDRR documentation</title>
+          <meta http-equiv="refresh" content="0; url=main/">
+          <link rel="canonical" href="main/">
+          </head>
+          <body>
+          <p><a href="main/">main (development)</a></p>
+          </body>
+          </html>
+          HTML
 
       - name: Verify build
         run: |
-          test -d docs/_build/site/latest
-          test -d docs/_build/site/stable || echo "::notice::no stable build yet (no tag exists)"
+          test -d docs/_build/html/main
+          test -d docs/_build/html/stable || echo "::notice::no stable build yet (no tag exists)"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: docs/_build/site
+          path: docs/_build/html
 
   deploy:
     name: Deploy to GitHub Pages
