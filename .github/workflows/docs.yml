@@ -58,34 +58,39 @@ jobs:
 
       - name: Build versioned site
         run: |
-          sphinx-multiversion docs docs/_build/html \
-            -b html -q
+          # ``sphinx-multiversion`` parses its own positional ``sourcedir``,
+          # ``outputdir`` and ``filenames`` with argparse. Attaching the
+          # builder name (``-bhtml``) keeps argparse from slurping the
+          # value of ``-b`` into the positional ``filenames`` list, which
+          # would then be passed through to sphinx as a stray filename.
+          sphinx-multiversion docs docs/_build/html -bhtml -q
 
       - name: Stage landing page
         run: |
           # sphinx-multiversion produces one subdirectory per ref under
-          # docs/_build/html/. Drop a tiny landing page at the site root
-          # that auto-redirects to ``main`` so the GitHub Pages URL still
-          # resolves to *something* even before any version is "active".
+          # docs/_build/html/ (e.g. tags/0.5.1/, heads/main/). Drop a tiny
+          # landing page at the site root that auto-redirects to the
+          # development build so the GitHub Pages URL still resolves to
+          # *something* even before any version is "active".
           cat > docs/_build/html/index.html <<'HTML'
           <!doctype html>
           <html lang="en">
           <head>
           <meta charset="utf-8">
           <title>FlashDRR documentation</title>
-          <meta http-equiv="refresh" content="0; url=main/">
-          <link rel="canonical" href="main/">
+          <meta http-equiv="refresh" content="0; url=heads/main/">
+          <link rel="canonical" href="heads/main/">
           </head>
           <body>
-          <p><a href="main/">main (development)</a></p>
+          <p><a href="heads/main/">main (development)</a></p>
           </body>
           </html>
           HTML
 
       - name: Verify build
         run: |
-          test -d docs/_build/html/main
-          test -d docs/_build/html/stable || echo "::notice::no stable build yet (no tag exists)"
+          test -d docs/_build/html/heads/main || test -d docs/_build/html/remotes/origin/main
+          test -d docs/_build/html/tags/stable || echo "::notice::no stable build yet (no tag exists)"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

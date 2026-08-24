@@ -71,17 +71,12 @@ html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 html_baseurl = 'https://pcarnah.github.io/flashdrr/'
 
-# Custom templates live here; sphinx-multiversion injects the per-build
-# ``versions`` and ``current_version`` Jinja context we use in
-# ``versioning.html`` to render the version selector flyout.
+# Custom templates live here. The sphinx-rtd-theme auto-picks up a
+# ``versions.html`` from the theme's own template path; by dropping one
+# with the same name into ``templates_path`` we override the empty stub
+# that ships with rtd and feed sphinx-multiversion's ``versions`` /
+# ``current_version`` Jinja context into the flyout menu.
 templates_path = ['_templates']
-html_sidebars = {
-    '**': [
-        'relations.html',
-        'searchbox.html',
-        'versioning.html',
-    ],
-}
 
 # -- sphinx-multiversion -----------------------------------------------------
 # Build documentation for every git tag matching the version pattern below
@@ -93,10 +88,18 @@ html_sidebars = {
 # ``Config.read(path, overrides)`` with the two-arg form that Sphinx 9.0
 # removed (sphinx-doc/sphinx#13633). The [docs] extra in pyproject.toml
 # pins ``sphinx<9`` to keep this compatible.
+# Build a version selector over release tags + the main branch. The
+# standard recipe (whitelist both local branches and remotes) collides on
+# ``main`` because ``refs/heads/main`` and ``refs/remotes/origin/main``
+# both map to the same outputdir. Restricting ``smv_remote_whitelist`` to
+# ``None`` (use local branches only) avoids the duplicate: CI's
+# ``actions/checkout`` always creates a local branch for the current ref,
+# so ``heads/main`` is the canonical development build, and release tags
+# are still discovered via ``refs/tags/*`` regardless of remote settings.
 smv_tag_whitelist = r'^v?\d+\.\d+\.\d+$'
 smv_branch_whitelist = r'^(main|master)$'
-smv_remote_whitelist = r'^origin$'
-smv_released_pattern = r'^tags/v?\d+\.\d+\.\d+$'
+smv_remote_whitelist = None
+smv_released_pattern = r'^refs/tags/v?\d+\.\d+\.\d+$'
 smv_outputdir_format = '{ref.name}'
 # When invoked through ``sphinx-multiversion`` we have a real ref; for a
 # plain ``sphinx-build`` invocation (e.g. local previews, RTD's single-version
