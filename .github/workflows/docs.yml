@@ -44,8 +44,11 @@ jobs:
           # Heavy runtime deps (torch, torchvision, monai, triton) are mocked
           # in docs/conf.py via autodoc_mock_imports, so we install flashdrr
           # with --no-deps to skip them entirely. This keeps the docs job off
-          # the CUDA wheels and ~1 GB lighter.
-          python -m pip install --no-deps -e ".[docs]"
+          # the CUDA wheels and ~1 GB lighter. The [docs] extra's own deps
+          # (sphinx, myst-parser, sphinx-rtd-theme) have to be installed
+          # explicitly since --no-deps also skips them.
+          python -m pip install sphinx myst-parser sphinx-rtd-theme
+          python -m pip install --no-deps -e "."
 
       - name: Decide version + alias
         id: meta
