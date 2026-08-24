@@ -68,7 +68,24 @@ autodoc_mock_imports = ['torch', 'numpy', 'triton', 'triton.language']
 html_theme = 'sphinx_rtd_theme'
 html_static_path = ['_static']
 html_baseurl = 'https://pcarnah.github.io/flashdrr/'
-# Inject the version-switcher dropdown on every page. The script fetches
-# versions.json (written by docs/_build_versions.py) and prepends a banner
-# to the page with a dropdown of stable/latest/<tag> builds.
+# Inject the version-switcher dropdown on every page. The script queries the
+# GitHub Releases API at runtime and prepends a banner with a dropdown of
+# stable/latest/<tag> builds. No per-build data file is needed: the release
+# list is the single source of truth.
 html_js_files = ['version-switcher.js']
+templates_path = ['_templates']
+# Inline <script> emitted by _templates/layout.html. Stamped at config load
+# time so sphinx can cache the config (callables are not picklable). Holds
+# this build's own version and whether it represents the moving main build.
+import json as _json
+_FLASHDRR_DOCS_PAYLOAD = _json.dumps(
+    {
+        'version': release,
+        'is_latest': bool(os.environ.get('FLASHDRR_DOCS_IS_LATEST')),
+    },
+    separators=(',', ':'),
+)
+html_context = {
+    'flashdrr_docs_context_js':
+        '<script>window.FLASHDRR_DOCS=' + _FLASHDRR_DOCS_PAYLOAD + ';</script>',
+}

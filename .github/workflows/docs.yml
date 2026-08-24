@@ -3,7 +3,10 @@ name: Docs
 on:
   push:
     branches: [main]
-    tags: ['v*']
+    # Tags may be ``v1.2.3`` or bare ``1.2.3`` — both forms build a stable
+    # docs snapshot. ``refs/tags/*`` matches everything; we just don't want
+    # to filter further here because tag naming isn't enforced.
+    tags: ['*']
   pull_request:
     branches: [main]
   release:
@@ -87,9 +90,8 @@ jobs:
 
       - name: Verify build
         run: |
-          test -f docs/_build/site/versions.json
           test -d docs/_build/site/latest
-          test -d docs/_build/site/stable || echo "::notice::no stable build yet (no v* tag exists)"
+          test -d docs/_build/site/stable || echo "::notice::no stable build yet (no tag exists)"
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3

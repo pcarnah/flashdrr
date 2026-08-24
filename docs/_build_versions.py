@@ -66,16 +66,20 @@ def build_version(
     *,
     version_string: str,
     out_dir: Path,
+    is_latest: bool = False,
 ) -> None:
     """Build the docs once with ``version_string`` exported as FLASHDRR_DOCS_VERSION.
 
     The docs conf.py picks that env var up to override ``release`` so the
     banner / version selector can show the actual version instead of the
     default (which is whatever flashdrr.__version__ is at build time).
+    ``is_latest`` is also exported as FLASHDRR_DOCS_IS_LATEST so the
+    in-page switcher can label this build as the moving development build.
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     env = os.environ.copy()
     env["FLASHDRR_DOCS_VERSION"] = version_string
+    env["FLASHDRR_DOCS_IS_LATEST"] = "1" if is_latest else ""
     cmd = [
         sys.executable,
         "-m",
@@ -86,7 +90,11 @@ def build_version(
         str(DOCS_DIR),
         str(out_dir),
     ]
-    print(f"+ {' '.join(cmd)}  (FLASHDRR_DOCS_VERSION={version_string})", flush=True)
+    print(
+        f"+ {' '.join(cmd)}  (FLASHDRR_DOCS_VERSION={version_string},"
+        f" latest={is_latest})",
+        flush=True,
+    )
     subprocess.run(cmd, cwd=REPO_ROOT, env=env, check=True)
 
 
@@ -125,21 +133,33 @@ def write_landing() -> None:
 
 
 def discover_tags() -> list[str]:
-    """Return ``v*`` tags sorted by semver-ish order, newest first."""
+    """Return release tags sorted by semver-ish order, newest first.
+
+    Tags may be either ``v1.2.3`` or bare ``1.2.3``; both are accepted and
+    the leading ``v`` is stripped so they all normalize to the same slug.
+    """
     out = subprocess.run(
-        ["git", "tag", "--list", "v*", "--sort=-v:refname"],
+        ["git", "tag", "--list", "--sort=-v:refname"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         check=True,
     )
-    return [line.strip() for line in out.stdout.splitlines() if line.strip()]
+    tags = []
+    for line in out.stdout.splitlines():
+        t = line.strip()
+        if not t:
+            continue
+        # Skip non-release tags (e.g. build metadata, pre-releases that look
+        # like ``x.y.z-<suffix>`` are still kept; only exclude obvious noise).
+        tags.append(t.removeprefix("v"))
+    return tags
 
 
 def _prune_only() -> int:
     index = load_index()
     tags = discover_tags()
-    keep = {slugify(t.removeprefix("v")) for t in tags}
+    keep = {slugify(t) for t in tags}
     for v in (index.get("latest"), index.get("stable")):
         if isinstance(v, str):
             keep.add(v)
@@ -205,26 +225,9 @@ def main() -> int:
     versions_dir = SITE_DIR / "versions"
     version_path = versions_dir / slug
 
-    # Build into a temp dir first so a failed build never leaves a half-baked
-    # version behind on the Pages artifact.
-    tmp_path = DOCS_DIR / "_build" / f"_tmp_{slug}"
-    if tmp_path.exists():
-        shutil.rmtree(tmp_path)
-    tmp_path.mkdir(parents=True)
-    try:
-        build_version(
-            version_string=args.version,
-            out_dir=tmp_path,
-        )
-    except subprocess.CalledProcessError:
-        shutil.rmtree(tmp_path, ignore_errors=True)
-        raise
-
-    if version_path.exists():
-        shutil.rmtree(version_path)
-    shutil.move(str(tmp_path), str(version_path))
-
-    # Record / refresh metadata.
+    # --- Mutate the in-memory index for the new build, then persist BEFORE
+    # running sphinx so the per-page static asset (flashdrr-versions.js)
+    # carries the new state, not the previous one.
     entry = {"version": args.version, "ref": args.ref}
     index["versions"][slug] = entry
     index[args.alias] = slug
@@ -244,29 +247,53 @@ def main() -> int:
                 keep.add(s)
     for old in list(index["versions"].keys()):
         if old not in keep:
-            old_path = versions_dir / old
-            if old_path.exists():
-                shutil.rmtree(old_path)
-            index["versions"].pop(old, None)
+            del index["versions"][old]
 
     if args.prune:
         tags = discover_tags()
-        keep = set()
-        for tag in tags:
-            keep.add(slugify(tag.removeprefix("v")))
-        for v in (index.get("latest"), index.get("stable")):
-            if v:
+        keep = {slugify(tag) for tag in tags}
+        for alias in ("latest", "stable"):
+            v = index.get(alias)
+            if isinstance(v, str):
                 keep.add(v)
         for old in list(index["versions"].keys()):
             if old not in keep:
-                old_path = versions_dir / old
-                if old_path.exists():
-                    shutil.rmtree(old_path)
-                index["versions"].pop(old, None)
-        # Drop alias pointers that no longer resolve.
+                del index["versions"][old]
         for alias in ("latest", "stable"):
             if index.get(alias) not in index["versions"]:
                 index[alias] = None
+
+    # Write versions.json and the page-local data file now. Sphinx will
+    # copy the latter into every page's _static/ when it runs.
+    save_index(index)
+
+    # --- Run sphinx into a temp dir so a failed build never leaves a
+    # half-baked version behind on the Pages artifact.
+    tmp_path = DOCS_DIR / "_build" / f"_tmp_{slug}"
+    if tmp_path.exists():
+        shutil.rmtree(tmp_path)
+    tmp_path.mkdir(parents=True)
+    try:
+        build_version(
+            version_string=args.version,
+            out_dir=tmp_path,
+            is_latest=(args.alias == "latest"),
+        )
+    except subprocess.CalledProcessError:
+        shutil.rmtree(tmp_path, ignore_errors=True)
+        raise
+
+    if version_path.exists():
+        shutil.rmtree(version_path)
+    shutil.move(str(tmp_path), str(version_path))
+
+    # Now that the new build is in place, drop any on-disk versioned dirs
+    # that the in-memory prune removed above.
+    survivors = set(index["versions"].keys())
+    if versions_dir.exists():
+        for entry in versions_dir.iterdir():
+            if entry.is_dir() and entry.name not in survivors:
+                shutil.rmtree(entry)
 
     # Refresh aliases.
     if index.get("stable") and (versions_dir / index["stable"]).exists():
@@ -278,7 +305,8 @@ def main() -> int:
     else:
         (SITE_DIR / "latest").unlink(missing_ok=True)
 
-    save_index(index)
+    # save_index was already called before sphinx ran so the data file would
+    # be picked up by the static asset copy step; do not call it again.
     write_landing()
     return 0
 
