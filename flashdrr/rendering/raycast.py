@@ -584,17 +584,16 @@ class VolumeRaycaster(nn.Module):
         # For matrices with small translation, assume world-to-camera and invert
         needs_invert = translation_norm < 1.0
 
-        cam_pos_ras = torch.zeros(batch_size, 3, device=device)
-        view_dir = torch.zeros(batch_size, 3, device=device)
+        cam_to_world_all = torch.inverse(camera_matrix)  # (B, 4, 4), batched invert — no loop needed
 
-        for i in range(batch_size):
-            if needs_invert[i]:
-                cam_to_world = torch.inverse(camera_matrix[i])
-                cam_pos_ras[i] = cam_to_world[:3, 3]
-                view_dir[i] = cam_to_world[:3, 2]
-            else:
-                cam_pos_ras[i] = camera_matrix[i, :3, 3]
-                view_dir[i] = camera_matrix[i, :3, 2]
+        pos_if_inv = cam_to_world_all[:, :3, 3]
+        dir_if_inv = cam_to_world_all[:, :3, 2]
+        pos_if_noninv = camera_matrix[:, :3, 3]
+        dir_if_noninv = camera_matrix[:, :3, 2]
+
+        mask = needs_invert.view(-1, 1)  # (B, 1), still a tensor — no Python branching
+        cam_pos_ras = torch.where(mask, pos_if_inv, pos_if_noninv)
+        view_dir = torch.where(mask, dir_if_inv, dir_if_noninv)
 
         # Normalize view directions
         view_dir = view_dir / torch.norm(view_dir, dim=1, keepdim=True)
@@ -1035,10 +1034,18 @@ if __name__ == '__main__':
 
     print(torch.cuda.memory_summary())
 
+    ren.cuda().compile()
+
     with torch.no_grad():
         with torch.autocast(device_type="cuda"):
             _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
             _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
+
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+
             start = timer()
             out_triton = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True).float()
             torch.cuda.synchronize()
@@ -1054,6 +1061,12 @@ if __name__ == '__main__':
         with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
             _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
             _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True)
+
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+            _ = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=False)
+
             start = timer()
             out_triton_bf16 = ren(mu.expand(1, 1, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True).float()
             torch.cuda.synchronize()
@@ -1083,6 +1096,9 @@ if __name__ == '__main__':
         print(
             f'Triton Max bf16/32: {(out_triton_fp32 - out_triton_bf16).abs().max()}, Mean: {(out_triton_fp32 - out_triton_bf16).abs().mean()}')
 
+
+
+
     ren = VolumeRaycaster(scatter=None, resolution=(512, 512), i0=None).cuda()
 
     torch.manual_seed(0)
@@ -1102,3 +1118,10 @@ if __name__ == '__main__':
         fast_mode=True,
     )
     print("gradcheck passed:", ok)
+
+    ren.compile()
+    _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+    _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+    out = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+
+    out.mean().backward()
