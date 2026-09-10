@@ -591,6 +591,7 @@ class FusedVolumeRenderer(torch.nn.Module):
             else lambda x: x
         )
 
+    @torch.compiler.disable
     def forward(
             self,
             density: torch.Tensor,

@@ -32,6 +32,7 @@ from flashdrr.utils import make_2d
 __all__ = ['get_vtk_view_mat', 'get_random_carm_views', 'carm_to_camera_params',
            'VolumeRaycaster']
 
+@torch.compiler.disable
 def get_random_carm_views(n_views, sid_range, ap_range, lat_range, si_range, center):
     """
     Randomly sample C-arm view matrices by uniform sampling of the underlying
@@ -96,7 +97,7 @@ def get_random_carm_views(n_views, sid_range, ap_range, lat_range, si_range, cen
 
     return views
 
-
+@torch.compiler.disable
 def carm_to_camera_params(sid, ap_angle, lat_angle, center_ras, table_si=0.0):
     """
     Convert C-arm position parameters to camera parameters.
@@ -174,7 +175,7 @@ def carm_to_camera_params(sid, ap_angle, lat_angle, center_ras, table_si=0.0):
 
     return cam_pos, look_at, look_up
 
-
+@torch.compiler.disable
 def get_vtk_view_mat(cam_pos: Tuple[float],  # (3,) camera center in RAS
                      cam_focal: Tuple[float],  # (3,) camera focal point in RAS
                      cam_viewup: Tuple[float],  # (3,) view-up vector in RAS)
@@ -1120,8 +1121,9 @@ if __name__ == '__main__':
     print("gradcheck passed:", ok)
 
     ren.compile()
-    _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
-    _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
-    out = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16):
+        _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+        _ = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
+        out = ren(mu.expand(1, 2, -1, -1, -1), view_mat=view_mat, ras2ijk=ras2ijk, triton=True,)
 
-    out.mean().backward()
+        out.mean().backward()
