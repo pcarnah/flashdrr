@@ -447,7 +447,8 @@ class VolumeRaycaster(nn.Module):
             use_beer_lambert: bool = True,
             scatter: Optional[int] = None,  # or int | None if Python 3.10+
             i0: Optional[float] = None,
-            fov: Optional[float] = 20.0
+            fov: Optional[float] = 20.0,
+            return_tau: Optional[bool] = False
     ) -> None:
         """
         Initialize the raycaster.
@@ -475,6 +476,13 @@ class VolumeRaycaster(nn.Module):
                 surrogate noise model. If ``None``, no noise is added.
             fov: Vertical field of view in degrees used to build the per-pixel
                 ray directions.
+            return_tau: If True, return the integrated attenuation ``tau``
+                (the line integral ``sum(mu * dz)``) instead of the default
+                attenuation image ``1 - exp(-tau)``. ``tau`` is not clamped
+                to ``[0, 1]``, which makes it suitable for targets or losses
+                defined in log-attenuation space. Only affects the
+                Beer-Lambert branch with ``scatter=None``; the alpha
+                compositing branch and the scatter branch ignore it.
         """
         super().__init__()
         self.density_factor = density_factor
@@ -483,6 +491,7 @@ class VolumeRaycaster(nn.Module):
         self.use_beer_lambert = use_beer_lambert
         self.scatter = None
         self.i0 = i0
+        self.return_tau = return_tau
         if isinstance(resolution, tuple):
             self.w, self.h = resolution
         else:
@@ -634,35 +643,53 @@ class VolumeRaycaster(nn.Module):
 
         return near, far
 
-    def apply_poisson(self, transmission: torch.Tensor) -> torch.Tensor:
+    def apply_poisson(self, x: torch.Tensor) -> torch.Tensor:
         """
         Add a differentiable Gaussian approximation of Poisson noise to a
-        transmission map.
+        transmission map or tau.
 
         If ``self.i0`` is ``None``, the input is returned unchanged (no
-        noise is added). Otherwise, Gaussian noise with standard deviation
+        noise is added). Otherwise, noise is applied in the photon-count
+        domain. For transmission input, Gaussian noise with standard deviation
         ``sqrt(transmission / i0)`` is added and the result is clamped to
-        ``[0, 1]``. This is a smooth surrogate for shot/Poisson noise and is
-        fully differentiable.
+        ``[0, 1]``. For tau input (``self.return_tau`` is True), counts
+        ``i0 * exp(-x)`` are perturbed by Gaussian noise of standard deviation
+        ``sqrt(counts)``, clamped to at least one count, and converted back to
+        tau; the noise is then added through a straight-through estimator so
+        gradients still flow. This is a smooth surrogate for shot/Poisson
+        noise and is fully differentiable.
 
         Args:
-            transmission: Transmission values (post-primary, pre-noise) in
-                ``[0, 1]``. Any shape is supported.
+            x: Transmission values (post-primary, pre-noise) in ``[0, 1]``,
+                or unbounded tau in log space when ``self.return_tau`` is
+                True. Any shape is supported.
 
         Returns:
-            torch.Tensor: Noisy transmission, same shape as ``transmission``,
-            clamped to ``[0, 1]``. Returns the input unchanged when ``i0`` is
+            torch.Tensor: Noisy transmission (clamped to ``[0, 1]``) or noisy
+            tau, matching the mode selected by ``self.return_tau`` and the
+            shape of ``x``. Returns the input unchanged when ``i0`` is
             ``None``.
         """
         if self.i0 is None:
-            return transmission
+            return x
 
         # Differentiable Gaussian approximation of Poisson
-        transmission = torch.clamp(transmission, min=1e-8)
-        std = torch.sqrt(transmission / self.i0)
-        epsilon = torch.randn_like(transmission)
-        noisy_transmission = transmission + std * epsilon
-        return torch.clamp(noisy_transmission, 0, 1)
+        if self.return_tau:
+            with torch.no_grad():
+                expected_counts = self.i0 * torch.exp(-x)
+                std = torch.sqrt(expected_counts)
+                noisy_counts = (
+                    expected_counts + std * torch.randn_like(x)
+                ).clamp_min(1.0)
+                noisy_tau = -torch.log(noisy_counts / self.i0)
+
+            return x + (noisy_tau - x).detach()
+        else:
+            transmission = torch.clamp(x, min=1e-8)
+            std = torch.sqrt(transmission / self.i0)
+            epsilon = torch.randn_like(transmission)
+            noisy_transmission = transmission + std * epsilon
+            return torch.clamp(noisy_transmission, 0, 1)
 
     def forward(self, vol: torch.Tensor, view_mat: torch.Tensor, ras2ijk: torch.Tensor,
                 tile_h: int = 256, tile_w: int = 256, triton: bool = False) -> torch.Tensor:
@@ -690,6 +717,10 @@ class VolumeRaycaster(nn.Module):
 
         Returns:
             torch.Tensor: Rendered projections of shape ``(N, C, H, W)``.
+            These are attenuation images in ``[0, 1)`` by default, or the
+            integrated attenuation ``tau`` when the raycaster was constructed
+            with ``return_tau=True`` (see the constructor for the exact
+            scope of that mode).
         """
         with torch.autocast(device_type='cuda', enabled=False):
 
@@ -719,7 +750,7 @@ class VolumeRaycaster(nn.Module):
 
             vol_shape = torch.as_tensor(vol.shape[2:], device=vol.device, dtype=torch.float32)
             if triton:
-                render_fn = lambda d, v, n, f: self.triton_raycaster(d, v, n, f, ras2ijk, vol_shape, self.dirs_cam)
+                render_fn = lambda d, v, n, f: self.triton_raycaster(d, v, n, f, ras2ijk, vol_shape, self.dirs_cam, self.return_tau)
             else:
                 render_fn = torch.vmap(
                     lambda d, v, n, f: self._render_single(d, v, n, f, ras2ijk, vol_shape, _tile_h, _tile_w),
@@ -787,9 +818,11 @@ class VolumeRaycaster(nn.Module):
                     I_out, _, _, _ = self.scatter(dens_tile[:, -self.scatter_channels:], step_size)
                     return torch.cat([I_out_no_scatter, 1.0 - I_out], dim=1).squeeze(0)  # (C, h, w)
                 else:
-                    return (1.0 - self.apply_poisson(
-                        torch.exp(-torch.sum(dens_tile * step_size, dim=2))
-                    )).squeeze(0)
+                    tau = torch.sum(dens_tile * step_size, dim=2)
+                    if self.return_tau:
+                        return self.apply_poisson(tau).squeeze(0)
+                    else:
+                        return (1.0 - self.apply_poisson(torch.exp(-tau))).squeeze(0)
             else:
                 d = self.density_factor * dens_tile / self.ray_samples
                 transmission = torch.cumprod(1.0 - d, dim=2)
@@ -878,7 +911,7 @@ if __name__ == '__main__':
     center = ijk2ras @ center
     print(center[:3])
 
-    ren = VolumeRaycaster(scatter=None, resolution=(1024, 1024), i0=None, ray_samples=384).cuda().eval()
+    ren = VolumeRaycaster(scatter=None, resolution=(1024, 1024), i0=None, ray_samples=384, return_tau=True).cuda().eval()
     # ren = torch.compile(ren)
     # vol = torch.rand(8, 1, 128, 128, 128).cuda()
     # vol.requires_grad_(True)

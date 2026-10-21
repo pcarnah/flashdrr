@@ -106,6 +106,95 @@ class TestRenderingModes:
 
 
 # ---------------------------------------------------------------------------
+# return_tau output mode
+# ---------------------------------------------------------------------------
+class TestReturnTau:
+    def test_matches_log_transmittance(self, small_random_volume, simple_view_mat):
+        # The default output is 1 - exp(-tau), so the tau mode must satisfy
+        # tau == -log(1 - default) exactly (no noise, i0=None).
+        torch.manual_seed(0)
+        ras2ijk = _identity_ras2ijk((16, 16, 16))
+        ren_drr = VolumeRaycaster(resolution=(16, 16), ray_samples=16)
+        ren_tau = VolumeRaycaster(resolution=(16, 16), ray_samples=16, return_tau=True)
+
+        drr = ren_drr(small_random_volume, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+        tau = ren_tau(small_random_volume, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+
+        assert tau.shape == drr.shape
+        assert torch.isfinite(tau).all()
+        # Non-negative density -> non-negative line integral
+        assert (tau >= 0).all()
+        assert torch.allclose(tau, -torch.log1p(-drr), atol=1e-6, rtol=1e-5)
+
+    def test_scales_linearly_with_density(self, simple_view_mat):
+        # tau is a linear line integral, unlike the saturating default image.
+        torch.manual_seed(0)
+        vol = torch.rand(1, 1, 16, 16, 16) * 0.1
+        ras2ijk = _identity_ras2ijk((16, 16, 16))
+        ren = VolumeRaycaster(resolution=(16, 16), ray_samples=16, return_tau=True)
+
+        tau_1x = ren(vol, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+        tau_4x = ren(vol * 4.0, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+
+        assert torch.allclose(tau_4x, 4.0 * tau_1x, atol=1e-6, rtol=1e-4)
+        # The default image, by contrast, is bounded by 1.
+        drr_4x = VolumeRaycaster(
+            resolution=(16, 16), ray_samples=16
+        )(vol * 4.0, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+        assert (drr_4x < 1.0).all()
+
+    def test_poisson_noise_is_applied_in_tau_mode(self, simple_view_mat):
+        # With i0 set, two independent calls should differ in tau space while
+        # remaining finite and statistically close.
+        torch.manual_seed(0)
+        vol = torch.rand(1, 1, 16, 16, 16)
+        ras2ijk = _identity_ras2ijk((16, 16, 16))
+        ren = VolumeRaycaster(
+            resolution=(16, 16), ray_samples=8, i0=1e3, return_tau=True
+        )
+        ren.eval()
+        a = ren(vol, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+        b = ren(vol, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+
+        assert torch.isfinite(a).all() and torch.isfinite(b).all()
+        assert not torch.equal(a, b)
+        assert (a - b).abs().mean() < 0.15
+        assert (a - b).abs().max() < 0.5
+        assert (a.mean() - b.mean()).abs() < 5e-2
+
+    def test_tau_mode_preserves_gradients(self, simple_view_mat):
+        # The straight-through Poisson path and the plain tau path must both
+        # backpropagate to the volume.
+        torch.manual_seed(0)
+        ras2ijk = _identity_ras2ijk((16, 16, 16))
+        for i0 in (None, 1e3):
+            vol = torch.rand(1, 1, 16, 16, 16, requires_grad=True)
+            ren = VolumeRaycaster(
+                resolution=(16, 16), ray_samples=8, i0=i0, return_tau=True
+            )
+            out = ren(vol, view_mat=simple_view_mat, ras2ijk=ras2ijk)
+            out.sum().backward()
+            assert vol.grad is not None
+            assert torch.isfinite(vol.grad).all()
+            assert vol.grad.abs().sum() > 0
+
+    def test_cumprod_branch_ignores_tau_mode(self, small_random_volume, simple_view_mat):
+        # Documented scope: return_tau only affects the Beer-Lambert branch.
+        torch.manual_seed(0)
+        ras2ijk = _identity_ras2ijk((16, 16, 16))
+        kwargs = dict(
+            resolution=(16, 16), ray_samples=8, use_beer_lambert=False
+        )
+        out_default = VolumeRaycaster(**kwargs)(
+            small_random_volume, view_mat=simple_view_mat, ras2ijk=ras2ijk
+        )
+        out_tau = VolumeRaycaster(return_tau=True, **kwargs)(
+            small_random_volume, view_mat=simple_view_mat, ras2ijk=ras2ijk
+        )
+        assert torch.allclose(out_default, out_tau, atol=1e-6)
+
+
+# ---------------------------------------------------------------------------
 # Scatter branch
 # ---------------------------------------------------------------------------
 class TestScatterBranch:

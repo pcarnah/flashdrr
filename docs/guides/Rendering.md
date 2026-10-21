@@ -79,6 +79,42 @@ view_mat = get_vtk_view_mat(pos, focal, up).unsqueeze(0)
 drr = raycaster(vol, view_mat=view_mat, ras2ijk=ras2ijk)
 ```
 
+## Output modes: attenuation image vs. `tau`
+
+By default both renderers return an **attenuation image**: the fraction of
+photons removed along each ray,
+
+```
+I = 1 - exp(-tau),    tau = sum(mu * dz)
+```
+
+so the default output is confined to `[0, 1)`. Construct the raycaster with
+`return_tau=True` to get `tau` itself — the unbounded log-attenuation (line
+integral) — instead:
+
+```python
+raycaster_tau = R.VolumeRaycaster(
+    ray_samples=256, resolution=(512, 512), return_tau=True
+)
+tau = raycaster_tau(vol, view_mat=view_mat, ras2ijk=ras2ijk)  # (1, 1, H, W)
+```
+
+This is useful when your target or loss lives in log-attenuation space, or
+when dense anatomy would otherwise saturate the `1 - exp(-tau)` image.
+
+* `tau` is non-negative for non-negative attenuation and is **not** clamped to
+  `[0, 1]`.
+* The noiseless default output and `tau` are related by
+  `tau == -log(1 - I)`; this holds for both backends.
+* With `i0` set, Poisson noise is sampled in the photon-count domain and added
+  to `tau` through a straight-through estimator, so gradients still flow.
+* The mode applies to the Beer–Lambert path (`use_beer_lambert=True`, the
+  default) when `scatter=None`. The alpha-compositing branch
+  (`use_beer_lambert=False`) and the scatter branch always return the standard
+  `[0, 1]` image.
+* `triton=True` is supported: the fused kernel returns `tau` as well and
+  matches the Python-loop backend within the usual numerical tolerance.
+
 ## Transfer functions
 
 CT voxels store Hounsfield units (HU). Before integrating attenuation you

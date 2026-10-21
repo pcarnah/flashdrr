@@ -601,7 +601,27 @@ class FusedVolumeRenderer(torch.nn.Module):
             ras2ijk: torch.Tensor,
             vol_shape: torch.Tensor,
             dirs_cam: torch.Tensor,
+            return_tau: bool = False
     ) -> torch.Tensor:
+        """Render a batch of volumes from a batch of views with the fused kernel.
+
+        Args:
+            density: Attenuation volume in ``(B, C, W, H, D)`` order.
+            view_mat: Camera-to-world view matrices, shape ``(B, 4, 4)``.
+            near: Near clipping distances, shape ``(B,)``.
+            far: Far clipping distances, shape ``(B,)``.
+            ras2ijk: 4x4 affine mapping RAS to IJK coordinates.
+            vol_shape: Spatial volume shape ``(D, H, W)``.
+            dirs_cam: Per-pixel camera-space ray directions, ``(H, W, 3)``.
+            return_tau: If True, return the integrated attenuation ``tau``
+                (optionally with Poisson noise applied in the count domain)
+                instead of the default ``1 - exp(-tau)`` attenuation image.
+
+        Returns:
+            torch.Tensor: ``(B, C, H, W)`` projection in the caller's dtype,
+            either the ``1 - exp(-tau)`` attenuation image or the
+            corresponding ``tau`` values.
+        """
         if not HAS_TRITON:
             raise ModuleNotFoundError("Requires triton.")
 
@@ -667,9 +687,12 @@ class FusedVolumeRenderer(torch.nn.Module):
                     / self.ray_samples
             ).view(B, 1, 1, 1)
 
-            scaled_extinction = torch.exp(
-                -fused_sum * step_size
-            )
+            tau = fused_sum * step_size
+
+            if return_tau:
+                return self.apply_poisson(tau).to(orig_dtype)
+
+            scaled_extinction = torch.exp(-tau)
 
             out = 1.0 - self.apply_poisson(scaled_extinction)
 

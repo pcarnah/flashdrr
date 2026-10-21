@@ -91,6 +91,42 @@ def test_triton_matches_python_fp32(gpu_device):
     )
 
 
+def test_triton_matches_python_return_tau(gpu_device):
+    """The tau output mode must agree across backends and stay consistent
+    with the default attenuation image (``tau == -log(1 - out)``).
+    """
+    torch.manual_seed(0)
+    device = gpu_device
+    vol = torch.rand(1, 1, 16, 16, 16, device=device, dtype=torch.float32)
+    view = _camera(device)
+    ras2ijk = _identity_ras2ijk((16, 16, 16), device)
+
+    ren = VolumeRaycaster(resolution=(32, 32), ray_samples=16).to(device)
+    ren_tau = VolumeRaycaster(
+        resolution=(32, 32), ray_samples=16, return_tau=True
+    ).to(device)
+
+    with torch.no_grad():
+        out_py = ren_tau(vol, view_mat=view, ras2ijk=ras2ijk)
+        out_triton = ren_tau(vol, view_mat=view, ras2ijk=ras2ijk, triton=True)
+        drr_py = ren(vol, view_mat=view, ras2ijk=ras2ijk)
+        drr_triton = ren(vol, view_mat=view, ras2ijk=ras2ijk, triton=True)
+
+    assert out_py.shape == out_triton.shape == (1, 1, 32, 32)
+    assert torch.isfinite(out_py).all() and torch.isfinite(out_triton).all()
+    # tau is a line integral: non-negative but not confined to [0, 1]
+    assert (out_py >= 0).all() and (out_triton >= 0).all()
+    # Backend parity
+    assert torch.allclose(out_py, out_triton, atol=1e-3, rtol=1e-3), (
+        f"max diff {(out_py - out_triton).abs().max().item()}"
+    )
+    # Both backends must be self-consistent with their own default output
+    assert torch.allclose(out_py, -torch.log1p(-drr_py), atol=1e-5, rtol=1e-4)
+    assert torch.allclose(
+        out_triton, -torch.log1p(-drr_triton), atol=1e-5, rtol=1e-4
+    )
+
+
 def test_triton_matches_python_8channels(gpu_device):
     """Match the dev-script's main configuration: 8 channels, large
     resolution. Scaled down to keep test time reasonable.
@@ -182,19 +218,26 @@ def test_triton_with_scatter(gpu_device):
 # Output is in caller's dtype
 # ---------------------------------------------------------------------------
 def test_triton_output_dtype_matches_input(gpu_device):
-    """The FusedVolumeRenderer is documented to return the caller's dtype
-    (see triton_raycast.py:678); verify that contract.
+    """Both output modes must return the caller's dtype, even though the
+    kernel computes in fp32 for non-fp64 inputs (see triton_raycast.py).
     """
     torch.manual_seed(0)
     device = gpu_device
-    vol = torch.rand(1, 1, 16, 16, 16, device=device, dtype=torch.float32)
     view = _camera(device)
     ras2ijk = _identity_ras2ijk((16, 16, 16), device)
+    dtypes = (torch.float32, torch.float16, torch.bfloat16)
 
-    ren = VolumeRaycaster(resolution=(16, 16), ray_samples=8).to(device)
-    with torch.no_grad():
-        out = ren(vol, view_mat=view, ras2ijk=ras2ijk, triton=True)
-    assert out.dtype == torch.float32
+    for dtype in dtypes:
+        vol = torch.rand(1, 1, 16, 16, 16, device=device, dtype=dtype)
+        ren = VolumeRaycaster(resolution=(16, 16), ray_samples=8).to(device)
+        ren_tau = VolumeRaycaster(
+            resolution=(16, 16), ray_samples=8, return_tau=True
+        ).to(device)
+        with torch.no_grad():
+            out = ren(vol, view_mat=view, ras2ijk=ras2ijk, triton=True)
+            out_tau = ren_tau(vol, view_mat=view, ras2ijk=ras2ijk, triton=True)
+        assert out.dtype == dtype
+        assert out_tau.dtype == dtype
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +284,17 @@ def test_fused_volume_renderer_directly(gpu_device):
     fvr = FusedVolumeRenderer(ray_samples=16)
     with torch.no_grad():
         out = fvr(density, view, near, far, ras2ijk, vol_shape, dirs_cam)
+        out_tau = fvr(
+            density, view, near, far, ras2ijk, vol_shape, dirs_cam,
+            return_tau=True,
+        )
     assert out.shape == (B, C, H, W)
+    assert out_tau.shape == (B, C, H, W)
     assert torch.isfinite(out).all()
+    assert torch.isfinite(out_tau).all()
     assert (out >= 0).all() and (out <= 1.0 + 1e-5).all()
+    # The standalone module must honour return_tau identically to the wrapper.
+    assert torch.allclose(out_tau, -torch.log1p(-out), atol=1e-5, rtol=1e-4)
 
 
 # ---------------------------------------------------------------------------

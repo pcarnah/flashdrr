@@ -17,7 +17,8 @@ pose estimation, and synthetic‑image generation from medical volumes.
 ## Features
 * **Differentiable DRR raycasting** — `flashdrr.rendering.VolumeRaycaster`
   renders physically‑based DRRs using the Beer‑Lambert law with fully
-  differentiable ray sampling.
+  differentiable ray sampling, and can return the raw integrated attenuation
+  `tau` (`return_tau=True`) instead of the `1 - exp(-tau)` image.
 * **Fast Triton‑fused renderer** — `flashdrr.rendering.FusedVolumeRenderer`
   runs a CUDA kernel for near‑instant, backprop‑free (or autograd-aware)
   projection at high resolution.

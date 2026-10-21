@@ -10,8 +10,10 @@ VTK/RAS conventions:
 * :class:`VolumeRaycaster` — the main, fully differentiable raycaster. It
   integrates attenuation along each ray (Beer–Lambert by default) and supports
   batching over both volumes and views, optional memory checkpointing and
-  tiled rendering, an optional learned scatter module, and an optional
-  Poisson noise model.
+  tiled rendering, an optional learned scatter module, an optional
+  Poisson noise model, and an optional `return_tau=True` mode that returns the
+  integrated attenuation `tau = sum(mu * dz)` instead of the `1 - exp(-tau)`
+  attenuation image.
 * :class:`FusedVolumeRenderer` — a Triton-fused CUDA kernel with a matching
   autograd wrapper. It is used internally by :class:`VolumeRaycaster` when
   `triton=True` and can also be used standalone for very fast projection.
